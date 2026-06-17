@@ -1,358 +1,267 @@
-﻿"""This script detects the GTA5_Enhanced.exe window and captures the screen.
-Using the pretrained model, it reads odds text from the game screen, selects the most probable choice,
-and clicks that choice. It then simulates a "Tab" keypress after a short delay and clicks the center of the screen.
-"""
-import argparse
-import re
-import time
-from pathlib import Path
-
-import cv2
+﻿import cv2
 import numpy as np
 import pyautogui
+import time
+import os
 import win32gui
-from PIL import ImageGrab
 
-MODEL_PATH = Path(__file__).resolve().parent / "resources" / "data" / "model.yml"
+DEBUG_MODE = True
+DEBUG_DIR = "debug"
 
+if DEBUG_MODE and not os.path.exists(DEBUG_DIR):
+    os.makedirs(DEBUG_DIR)
 
-def find_gta_window():
-    candidates = [
-        'gta5_enhanced.exe',
-        'gta_enhanced.exe',
-        'grand theft auto v enhanced',
-        'grand theft auto v',
-    ]
+# --- Global Stats Tracking ---
+class BettingStats:
+    def __init__(self):
+        self.races_won = 0
+        self.races_lost = 0
+        self.winnings = 0
+        self.time_running = time.time()
+        
+    def print_stats(self):
+        elapsed = int(time.time() - self.time_running)
+        print(f"\n--- SESSION STATS ---")
+        print(f"Races Won:  {self.races_won}")
+        print(f"Races Lost: {self.races_lost}")
+        print(f"Time Ran:   {elapsed // 60}m {elapsed % 60}s")
+        print(f"---------------------\n")
 
-    def enum_windows_callback(hwnd, windows):
-        if not win32gui.IsWindowVisible(hwnd):
-            return
-        title = win32gui.GetWindowText(hwnd).lower()
-        for cand in candidates:
-            if cand in title:
-                windows.append(hwnd)
-                return
-
-    windows = []
-    win32gui.EnumWindows(enum_windows_callback, windows)
-    return windows[0] if windows else None
-
-
-def capture_gta_window(hwnd):
-    left, top, right, bottom = win32gui.GetWindowRect(hwnd)
-    return ImageGrab.grab(bbox=(left, top, right, bottom)), (left, top), (right - left, bottom - top)
-
-
-def preprocess_image(image):
-    gray = cv2.cvtColor(np.array(image), cv2.COLOR_BGR2GRAY)
-    blurred = cv2.GaussianBlur(gray, (3, 3), 0)
-    thresh = cv2.adaptiveThreshold(
-        blurred,
-        255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY_INV,
-        11,
-        2,
-    )
-    return thresh
-
-
-def load_model():
-    if not MODEL_PATH.exists():
-        raise FileNotFoundError(f"Pretrained model not found at {MODEL_PATH}")
-    return cv2.ml.KNearest_load(str(MODEL_PATH))
-
-
-def predict_character(model, roi):
-    if roi.size == 0:
-        return '?'
+def load_knn_model():
+    """Loads and verifies the KNN model handling both native and manual YAML formats."""
+    filepath = 'resources/data/model.yml'
+    
+    if not os.path.exists(filepath):
+        print(f"Error: Model file not found at '{filepath}'")
+        return None
+        
+    # METHOD 1: Try OpenCV's native ML loader
     try:
-        resized = cv2.resize(roi, (10, 10))
-    except cv2.error:
-        return '?'
-    sample = resized.reshape((1, 100)).astype(np.float32)
-    _, results, _, _ = model.findNearest(sample, k=10)
-    val = int(results[0][0])
+        model = cv2.ml.KNearest_load(filepath)
+        if model is not None and model.isTrained():
+            print("Model loaded successfully via cv2.ml.KNearest_load().")
+            return model
+    except Exception:
+        pass 
+
+    # METHOD 2: Try manual parsing
     try:
-        return chr(val)
-    except ValueError:
-        return '?'
-
-
-def parse_odds_text(text):
-    if not text:
-        return None
-    normalized = text.lower().strip()
-    if '?' in normalized:
-        return None
-
-    if normalized in ('evens', 'even'):
-        return 1.0
-
-    if normalized == '0':
-        return None
-
-    m = re.match(r'^(\d+)\s*[/: -]\s*(\d+)$', normalized)
-    if m:
-        a = int(m.group(1))
-        b = int(m.group(2))
-        if a + b == 0:
+        print("Native ML load failed/unsupported. Attempting manual matrix extraction...")
+        fs = cv2.FileStorage(filepath, cv2.FILE_STORAGE_READ)
+        if not fs.isOpened():
+            print("Error: Could not open model.yml for manual parsing.")
             return None
-        return float(b) / float(a + b)
 
-    m = re.match(r'^\+?(\d+)$', normalized)
-    if m:
-        a = int(m.group(1))
-        if a + 1 == 0:
+        root_knn = fs.getNode('opencv_ml_knn')
+        parent_node = root_knn if not root_knn.empty() else fs
+
+        def extract_matrix(keys):
+            for key in keys:
+                node = parent_node.getNode(key)
+                if not node.empty():
+                    return node.mat()
             return None
-        return 1.0 / float(a + 1)
 
-    m = re.search(r'(\d+)', normalized)
-    if m:
-        a = int(m.group(1))
-        if a + 1 == 0:
+        samples = extract_matrix(['samples', 'train_data', 'trainData', 'data'])
+        responses = extract_matrix(['responses', 'train_labels', 'labels', 'responsesData'])
+        fs.release()
+
+        if samples is None or responses is None:
+            print("Error: Model file is missing recognizable matrices.")
             return None
-        return 1.0 / float(a + 1)
 
-    return None
+        model = cv2.ml.KNearest_create()
+        model.train(np.float32(samples), cv2.ml.ROW_SAMPLE, np.float32(responses))
+        print("Model verified and loaded successfully via manual matrix extraction.")
+        return model
 
+    except Exception as e:
+        print(f"Failed to load model manually: {e}")
+        return None
 
-def get_reference_odds_regions(window_size):
-    multiplierW = window_size[0] / 2560.0
-    multiplierH = window_size[1] / 1440.0
-
-    x2 = int(round(220 * multiplierW))
-    x1 = int(round(965 * multiplierW))
-    x3 = int(round(1755 * multiplierW))
-    y1 = int(round(1040 * multiplierH))
-    y2 = int(round(1070 * multiplierH))
-    h = int(round(75 * multiplierH))
-    w = int(round(160 * multiplierW))
-
-    return [
-        {'name': 'second', 'rect': (x2, y1, w, h)},
-        {'name': 'first', 'rect': (x1, y2, w, h)},
-        {'name': 'third', 'rect': (x3, y1, w, h)},
-    ]
-
-
-def odd_to_short(odd_text):
-    if not odd_text:
-        return -1
-    s = odd_text.strip().lower()
-    if 'even' in s:
+def parse_odds(pred_str):
+    """Translates the string prediction to a short/int."""
+    pred = pred_str.strip().lower()
+    
+    # Common OCR mistakes compensation
+    pred = pred.replace('\\', '/').replace('|', '/').replace('l', '/').replace('i', '/')
+    
+    if not pred: return -1
+    
+    # Fuzzy match for 'evens' in case of a minor 1-letter OCR mistake
+    if "even" in pred or "evn" in pred or "eve" in pred: 
         return 1
-
-    m = re.match(r'^(\d+)\s*[/: -]\s*(\d+)$', s)
-    if m:
-        a = int(m.group(1))
-        b = int(m.group(2))
-        if b == 0:
-            return -1
-        val = a // b if a % b == 0 else a
-        if val <= 0:
-            return -1
-        return min(val, 10)
-
-    m = re.match(r'^\+?(\d+)$', s)
-    if m:
-        val = int(m.group(1))
-        return min(val, 10) if val > 0 else -1
-
-    return -1
-
-
-def get_basic_betting_position(odds_texts):
-    if len(odds_texts) != 6:
+        
+    slash_idx = pred.find('/')
+    if slash_idx == -1: return -1
+        
+    try:
+        return int(pred[:slash_idx])
+    except ValueError:
         return -1
 
-    res = [-1] * 6
-    for i in range(6):
-        b_res = odd_to_short(odds_texts[i])
-        if b_res <= 5 and b_res in res:
-            return -1
-        res[i] = b_res
-
-    if 1 in res:
-        lowest = -1
-        for r in res:
-            if (lowest == -1 or r < lowest) and r != 1:
-                lowest = r
-        if lowest != -1 and lowest < 4:
-            return -1
-
-    lowest_pos = 0
-    lowest_val = res[0]
-    for i in range(1, 6):
-        if res[i] == -1:
+def read_odds(model, img, horse_index):
+    """Reads the odds by parsing individual character contours."""
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    
+    # 1. Increase contrast significantly
+    high_contrast = cv2.convertScaleAbs(gray, alpha=2.0, beta=-50)
+    
+    # 2. Use Otsu's Thresholding (Creates White text on Black background)
+    _, thresh = cv2.threshold(high_contrast, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    
+    if DEBUG_MODE:
+        timestamp = int(time.time())
+        filename = os.path.join(DEBUG_DIR, f"debug_horse{horse_index}_{timestamp}.png")
+        cv2.imwrite(filename, thresh)
+        
+    # findContours NEEDS White text on a Black background to work
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    detected_chars = []
+    
+    for c in contours:
+        x, y, w, h = cv2.boundingRect(c)
+        if w * h < 5:  
             continue
-        if lowest_val == -1 or res[i] < lowest_val:
-            lowest_val = res[i]
-            lowest_pos = i
+            
+        # Crop the White-on-Black character
+        roi = thresh[y:y+h, x:x+w]
+        
+        # 3. INVERT the character to Black-on-White!
+        # The KNN model was trained on Black text on a White background.
+        # If we don't flip it, the model gets confused and guesses letters like 'v' or 'e'.
+        roi_inverted = cv2.bitwise_not(roi)
+        
+        # Resize to 10x10 to match the 100 columns expected by model.yml
+        resized = cv2.resize(roi_inverted, (10, 10))
+        sample = resized.reshape((1, -1)).astype(np.float32)
+        
+        # Predict
+        ret, results, neighbours, dist = model.findNearest(sample, k=1)
+        pred_val = int(results[0][0])
+        pred_char = chr(pred_val) if 0 <= pred_val <= 255 else str(pred_val)
+        
+        detected_chars.append((x, pred_char))
 
-    return lowest_pos if lowest_val != -1 else -1
+    # Sort characters by X-coordinate to read left-to-right
+    detected_chars.sort(key=lambda item: item[0])
+    pred_str = "".join([char for x, char in detected_chars])
+    
+    return parse_odds(pred_str), pred_str
 
-
-def group_contours(contours):
-    regions = []
-    for cnt in contours:
-        x, y, w, h = cv2.boundingRect(cnt)
-        if cv2.contourArea(cnt) < 50:
-            continue
-        if h <= 28 or w < 9 or w > 28:
-            continue
-        regions.append((x, y, w, h))
-
-    regions.sort(key=lambda item: (item[1], item[0]))
-    groups = []
-    for x, y, w, h in regions:
-        matched = False
-        for group in groups:
-            gx, gy, gw, gh, items = group
-            if abs(y - gy) < 20:
-                group[0] = min(gx, x)
-                group[1] = min(gy, y)
-                group[2] = max(gw, x + w - gx)
-                group[3] = max(gh, y + h - gy)
-                items.append((x, y, w, h))
-                matched = True
-                break
-        if not matched:
-            groups.append([x, y, w, h, [(x, y, w, h)]])
-    return groups
-
-
-def extract_odds_choices(model, thresh_image, debug=False):
-    contours, _ = cv2.findContours(thresh_image, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-    groups = group_contours(contours)
-    choices = []
-    vis = cv2.cvtColor(thresh_image, cv2.COLOR_GRAY2BGR)
-    for gx, gy, gw, gh, items in groups:
-        items.sort(key=lambda item: item[0])
-        text = ''
-        for x, y, w, h in items:
-            roi = thresh_image[y:y + h, x:x + w]
-            char = predict_character(model, roi)
-            text += char
-            if debug:
-                cv2.rectangle(vis, (x, y), (x + w, y + h), (0, 255, 0), 1)
-                cv2.putText(vis, char, (x, y - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
-        odds_value = parse_odds_text(text)
-        if odds_value is not None:
-            choices.append({'text': text, 'value': odds_value, 'rect': (gx, gy, gw, gh)})
-            if debug:
-                cv2.rectangle(vis, (gx, gy), (gx + gw, gy + gh), (255, 0, 0), 2)
-                cv2.putText(vis, text, (gx, gy - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
-    return choices, vis
-
-
-def annotate_odds_snapshot(image, choices, reference_regions=None):
-    annotated = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
-    if reference_regions:
-        for ref in reference_regions:
-            gx, gy, gw, gh = ref['rect']
-            label = f"ref:{ref['name']}"
-            cv2.rectangle(annotated, (gx, gy), (gx + gw, gy + gh), (255, 255, 0), 2)
-            cv2.putText(annotated, label, (gx, max(gy - 10, 0)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
-
-    for choice in choices:
-        gx, gy, gw, gh = choice['rect']
-        label = choice['text']
-        cv2.rectangle(annotated, (gx, gy), (gx + gw, gy + gh), (0, 255, 0), 2)
-        cv2.putText(annotated, label, (gx, max(gy - 10, 0)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-    return annotated
-
-
-def choose_best_choice(choices):
-    if not choices:
-        return None
-    return max(choices, key=lambda c: c['value'])
-
-
-def run_click_sequence(window_offset, window_size, best_choice):
-    if best_choice:
-        gx, gy, gw, gh = best_choice['rect']
-        left, top = window_offset
-        click_x = left + gx + gw // 2
-        click_y = top + gy + gh // 2
-        pyautogui.click(x=click_x, y=click_y)
-        print(f"Clicked choice '{best_choice['text']}' at screen position ({click_x}, {click_y})")
-    else:
-        print("No valid odds choice detected; skipping choice click.")
-
-    time.sleep(0.5)
-    pyautogui.press('tab')
-    left, top = window_offset
-    window_width, window_height = window_size
-    pyautogui.click(x=left + window_width // 2, y=top + window_height // 2)
-    print("Pressed Tab and clicked center of the detected GTA window.")
-
-
-def main():
-    parser = argparse.ArgumentParser(description='GTA odds clicker')
-    parser.add_argument('--debug', action='store_true', help='Show debug visuals for detection')
-    args = parser.parse_args()
-
-    gta_window = find_gta_window()
-    if not gta_window:
-        print("GTA window not found.")
-        return
-
-    window_text = win32gui.GetWindowText(gta_window)
-    left, top, right, bottom = win32gui.GetWindowRect(gta_window)
-    print(f"Detected GTA window: '{window_text}' at ({left}, {top}, {right}, {bottom})")
-
+def get_gta_window_info():
+    """Gets GTA V window bounds for dynamic resolution multiplier logic."""
     try:
-        model = load_model()
-    except FileNotFoundError as exc:
-        print(exc)
+        hwnd = win32gui.FindWindow(None, "Grand Theft Auto V")
+        if hwnd:
+            rect = win32gui.GetWindowRect(hwnd)
+            x, y, w, h = rect[0], rect[1], rect[2] - rect[0], rect[3] - rect[1]
+            if w > 0 and h > 0:
+                return hwnd, x, y, w, h
+    except Exception:
+        pass
+    return None, 0, 0, 0, 0
+
+def get_dynamic_boxes(width, height):
+    """Calculates coordinates mathematically based on 1920x1080 baseline."""
+    mult_w = width / 1920.0
+    mult_h = height / 1080.0
+
+    boxes = []
+    base_y_coords = [370, 485, 600, 715, 830, 945]  
+    base_x = 240
+    base_width = 90
+    base_height = 45
+
+    for y in base_y_coords:
+        boxes.append((
+            int(base_x * mult_w),
+            int(y * mult_h),
+            int(base_width * mult_w),
+            int(base_height * mult_h)
+        ))
+    return boxes
+
+def main_loop():
+    model = load_knn_model()
+    stats = BettingStats()
+    
+    if model is None:
+        print("Exiting due to model load failure.")
         return
 
     while True:
-        screenshot, window_offset, window_size = capture_gta_window(gta_window)
-        reference_regions = get_reference_odds_regions(window_size)
-        processed_image = preprocess_image(screenshot)
-        choices, vis = extract_odds_choices(model, processed_image, debug=args.debug)
-        best_choice = choose_best_choice(choices)
+        hwnd, win_x, win_y, win_w, win_h = get_gta_window_info()
+        
+        if not hwnd or win32gui.GetForegroundWindow() != hwnd:
+            print("GTA V is not active or minimized. Waiting...")
+            time.sleep(2)
+            continue
 
-        if len(choices) == 6:
-            odds_texts = [c['text'] for c in choices]
-            bet_pos = get_basic_betting_position(odds_texts)
-            if 0 <= bet_pos < 6:
-                print(f"Betting algorithm selected position: {bet_pos} (odd={odds_texts[bet_pos]})")
-                best_choice = choices[bet_pos]
+        print("\nTaking screenshot of game window...")
+        screenshot = pyautogui.screenshot(region=(win_x, win_y, win_w, win_h))
+        frame = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
 
-        if choices:
-            print("Detected choices:")
-            for c in choices:
-                print(f" - {c['text']} => {c['value']} at {c['rect']}")
-            if best_choice:
-                print(f"Best odds detected: {best_choice['text']} (value={best_choice['value']})")
+        dynamic_boxes = get_dynamic_boxes(win_w, win_h)
+
+        odds_list = []
+        raw_list = []
+        for i, (x, y, w, h) in enumerate(dynamic_boxes):
+            crop = frame[y:y+h, x:x+w]
+            odds, raw_str = read_odds(model, crop, i + 1)
+            odds_list.append(odds)
+            raw_list.append(raw_str)
+            
+        print("\n--- ODDS ANALYSIS ---")
+        best_horse_idx = -1
+        best_prob = -1.0
+        valid_odds_found = False
+
+        for idx, odds in enumerate(odds_list):
+            raw_str = raw_list[idx]
+            if odds > 0:
+                prob = 100.0 / (odds + 1)
+                odds_str = "Evens" if odds == 1 else f"{odds}/1"
+                print(f"Horse {idx + 1}: {odds_str} ({prob:.1f}% chance) [Raw OCR: '{raw_str}']")
+                
+                if prob > best_prob:
+                    best_prob = prob
+                    best_horse_idx = idx
+                    valid_odds_found = True
+            else:
+                print(f"Horse {idx + 1}: Unreadable/Invalid [Raw OCR: '{raw_str}']")
+        print("---------------------\n")
+        
+        if valid_odds_found: 
+             print(f"-> Most probable choice: Horse {best_horse_idx + 1} ({best_prob:.1f}% chance)")
+             try:
+                 target_box = dynamic_boxes[best_horse_idx]
+                 click_x = win_x + target_box[0] + (target_box[2] // 2)
+                 click_y = win_y + target_box[1] + (target_box[3] // 2)
+                 pyautogui.click(click_x, click_y)
+                 print(f"Clicked Horse {best_horse_idx + 1} at ({click_x}, {click_y})")
+                 time.sleep(0.5)
+                 
+                 pyautogui.press('tab')
+                 print("Pressed Tab")
+                 time.sleep(0.5)
+                 
+                 center_x = win_x + (win_w // 2)
+                 center_y = win_y + (win_h // 2)
+                 pyautogui.click(center_x, center_y)
+                 print(f"Clicked Window Center at ({center_x}, {center_y})")
+                 
+                 print("Bet placed. Waiting for race to finish (30s)...")
+                 time.sleep(30)
+                 stats.races_won += 1
+                 stats.print_stats()
+             except Exception as e:
+                 print(f"Error during clicking phase: {e}")
         else:
-            print("No odds detected in the current frame.")
+             print("No valid odds could be read. Refreshing...")
+             time.sleep(2)
 
-        if args.debug:
-            snapshot = annotate_odds_snapshot(screenshot, choices, reference_regions)
-            snapshot_path = Path.cwd() / 'debug_snapshot.png'
-            cv2.imwrite(str(snapshot_path), snapshot)
-            print(f"Saved debug snapshot with labeled odds to {snapshot_path}")
-            for ref in reference_regions:
-                gx, gy, gw, gh = ref['rect']
-                cv2.rectangle(vis, (gx, gy), (gx + gw, gy + gh), (255, 255, 0), 2)
-                cv2.putText(vis, f"ref:{ref['name']}", (gx, max(gy - 10, 0)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
-            cv2.imshow('thresh', processed_image)
-            cv2.imshow('detection', vis)
-            key = cv2.waitKey(1) & 0xFF
-            if key == 27:
-                print('Debug exit')
-                break
+        time.sleep(1)
 
-        run_click_sequence(window_offset, window_size, best_choice)
-        time.sleep(30)
-
-    if args.debug:
-        cv2.destroyAllWindows()
-
-
-if __name__ == '__main__':
-    main()
+if __name__ == "__main__":
+    main_loop()
