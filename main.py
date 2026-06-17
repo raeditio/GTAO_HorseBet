@@ -1,15 +1,27 @@
 ﻿import cv2
 import numpy as np
 import pyautogui
+import pydirectinput
 import time
 import os
 import win32gui
+import argparse
 
-DEBUG_MODE = True
+DEBUG_MODE = False
 DEBUG_DIR = "debug"
+
+# --- Argument Parsing ---
+arg_parser = argparse.ArgumentParser(description="GTA V Horse Betting Automation")
+arg_parser.add_argument('--debug', action='store_true', help="Enable debug mode to save intermediate images.")
+args = arg_parser.parse_args()
+DEBUG_MODE = args.debug
 
 if DEBUG_MODE and not os.path.exists(DEBUG_DIR):
     os.makedirs(DEBUG_DIR)
+elif DEBUG_MODE:
+    # Empty directory
+    for f in os.listdir(DEBUG_DIR):
+        os.remove(os.path.join(DEBUG_DIR, f))
 
 # --- Global Stats Tracking ---
 class BettingStats:
@@ -24,6 +36,7 @@ class BettingStats:
         print(f"\n--- SESSION STATS ---")
         print(f"Races Won:  {self.races_won}")
         print(f"Races Lost: {self.races_lost}")
+        print(f"Winnings:   {self.winnings}")
         print(f"Time Ran:   {elapsed // 60}m {elapsed % 60}s")
         print(f"---------------------\n")
 
@@ -86,6 +99,10 @@ def parse_odds(pred_str):
     # Common OCR mistakes compensation
     pred = pred.replace('\\', '/').replace('|', '/').replace('l', '/').replace('i', '/')
     
+    # A valid GTA odd never starts with a 0. If it does, it was misread and is almost certainly an 8.
+    if pred.startswith('0'):
+        pred = '8' + pred[1:]
+    
     if not pred: return -1
     
     # Fuzzy match for 'evens' in case of a minor 1-letter OCR mistake
@@ -129,7 +146,6 @@ def read_odds(model, img, horse_index):
         
         # 3. INVERT the character to Black-on-White!
         # The KNN model was trained on Black text on a White background.
-        # If we don't flip it, the model gets confused and guesses letters like 'v' or 'e'.
         roi_inverted = cv2.bitwise_not(roi)
         
         # Resize to 10x10 to match the 100 columns expected by model.yml
@@ -141,6 +157,27 @@ def read_odds(model, img, horse_index):
         pred_val = int(results[0][0])
         pred_char = chr(pred_val) if 0 <= pred_val <= 255 else str(pred_val)
         
+        # --- 0 vs 8 Disambiguation Heuristic ---
+        # The KNN often confuses 0 and 8 when downscaled. 
+        # We physically inspect the center pixels of the unscaled ROI to verify.
+        if pred_char in ['0', '8', 'O', 'o']:
+            h_roi, w_roi = roi.shape
+            # Extract the center 30% of the character
+            cy_start, cy_end = int(h_roi * 0.35), int(h_roi * 0.65)
+            cx_start, cx_end = int(w_roi * 0.35), int(w_roi * 0.65)
+            
+            center_region = roi[cy_start:cy_end, cx_start:cx_end]
+            if center_region.size > 0:
+                # Calculate how much of the center is filled with white pixels
+                fill_ratio = cv2.countNonZero(center_region) / center_region.size
+                
+                # An '8' has a center crossbar (high fill ratio), a '0' is hollow (low fill ratio)
+                if fill_ratio > 0.2:
+                    pred_char = '8'
+                else:
+                    pred_char = '0'
+        # ---------------------------------------
+
         detected_chars.append((x, pred_char))
 
     # Sort characters by X-coordinate to read left-to-right
@@ -150,28 +187,35 @@ def read_odds(model, img, horse_index):
     return parse_odds(pred_str), pred_str
 
 def get_gta_window_info():
-    """Gets GTA V window bounds for dynamic resolution multiplier logic."""
+    """Gets GTA V actual rendering bounds, ignoring Windows title bars and borders."""
     try:
         hwnd = win32gui.FindWindow(None, "Grand Theft Auto V")
         if hwnd:
-            rect = win32gui.GetWindowRect(hwnd)
-            x, y, w, h = rect[0], rect[1], rect[2] - rect[0], rect[3] - rect[1]
-            if w > 0 and h > 0:
-                return hwnd, x, y, w, h
+            # Get the exact rendering resolution of the game (excludes title bar)
+            client_rect = win32gui.GetClientRect(hwnd)
+            win_w = client_rect[2] - client_rect[0]
+            win_h = client_rect[3] - client_rect[1]
+            
+            # Map the inner window coordinate (0,0) to absolute screen coordinates
+            top_left = win32gui.ClientToScreen(hwnd, (0, 0))
+            win_x, win_y = top_left[0], top_left[1]
+            
+            if win_w > 0 and win_h > 0:
+                return hwnd, win_x, win_y, win_w, win_h
     except Exception:
         pass
     return None, 0, 0, 0, 0
 
 def get_dynamic_boxes(width, height):
-    """Calculates coordinates mathematically based on 1920x1080 baseline."""
-    mult_w = width / 1920.0
-    mult_h = height / 1080.0
+    """Calculates coordinates mathematically based on verified 1024x768 baseline."""
+    mult_w = width / 1024.0
+    mult_h = height / 768.0
 
     boxes = []
-    base_y_coords = [370, 485, 600, 715, 830, 945]  
-    base_x = 240
-    base_width = 90
-    base_height = 45
+    base_y_coords = [243, 330, 416, 503, 589, 676]  
+    base_x = 120
+    base_width = 58
+    base_height = 32
 
     for y in base_y_coords:
         boxes.append((
@@ -198,7 +242,7 @@ def main_loop():
             time.sleep(2)
             continue
 
-        print("\nTaking screenshot of game window...")
+        print(f"\nTaking screenshot of game window... ({win_w}x{win_h})")
         screenshot = pyautogui.screenshot(region=(win_x, win_y, win_w, win_h))
         frame = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
 
@@ -233,33 +277,95 @@ def main_loop():
         print("---------------------\n")
         
         if valid_odds_found: 
-             print(f"-> Most probable choice: Horse {best_horse_idx + 1} ({best_prob:.1f}% chance)")
-             try:
-                 target_box = dynamic_boxes[best_horse_idx]
-                 click_x = win_x + target_box[0] + (target_box[2] // 2)
-                 click_y = win_y + target_box[1] + (target_box[3] // 2)
-                 pyautogui.click(click_x, click_y)
-                 print(f"Clicked Horse {best_horse_idx + 1} at ({click_x}, {click_y})")
-                 time.sleep(0.5)
-                 
-                 pyautogui.press('tab')
-                 print("Pressed Tab")
-                 time.sleep(0.5)
-                 
-                 center_x = win_x + (win_w // 2)
-                 center_y = win_y + (win_h // 2)
-                 pyautogui.click(center_x, center_y)
-                 print(f"Clicked Window Center at ({center_x}, {center_y})")
-                 
-                 print("Bet placed. Waiting for race to finish (30s)...")
-                 time.sleep(30)
-                 stats.races_won += 1
-                 stats.print_stats()
-             except Exception as e:
-                 print(f"Error during clicking phase: {e}")
+            print(f"-> Most probable choice: Horse {best_horse_idx + 1} ({best_prob:.1f}% chance)")
+            try:
+                target_box = dynamic_boxes[best_horse_idx]
+                
+                # Click the center of the horse odds box
+                click_x = win_x + target_box[0] + (target_box[2] * 3)  # multiplier takes account of the slower in-game cursor speed
+                click_y = win_y + target_box[1] + (target_box[3] // 3)
+                
+                pydirectinput.moveTo(int(click_x), int(click_y))
+                pydirectinput.mouseDown()
+                pydirectinput.mouseUp()
+                print(f"Clicked Horse {best_horse_idx + 1} at ({click_x}, {click_y})")
+                time.sleep(0.5)
+                
+                pydirectinput.keyDown('tab')
+                pydirectinput.keyUp('tab')
+                print("Pressed Tab")
+                
+                # Click "Place Bet" button (Converted to 1024x768 baseline)
+                button_x = win_x + (656 / 1024.0) * win_w
+                button_y = win_y + (562 / 768.0) * win_h
+                pydirectinput.moveTo(int(button_x), int(button_y))
+                pydirectinput.mouseDown()
+                pydirectinput.mouseUp()
+                
+                print("Bet placed. Waiting for race to finish (~34s)...")
+                time.sleep(34)
+
+                # Get the winnings using the 1024x768 baseline modifiers
+                mult_w = win_w / 1024.0
+                mult_h = win_h / 768.0
+                
+                y_coord = int(500 * mult_h)
+                h_coord = int(57 * mult_h)
+                x_coord = int(500 * mult_w)
+                w_coord = int(162 * mult_w)
+                
+                print("Checking for winnings...")
+                winnings_img = pyautogui.screenshot(region=(win_x + x_coord, win_y + y_coord, w_coord, h_coord))
+                winnings_crop = cv2.cvtColor(np.array(winnings_img), cv2.COLOR_RGB2BGR)
+
+                if DEBUG_MODE:
+                    cv2.imwrite(os.path.join(DEBUG_DIR, f"debug_winnings_{int(time.time())}.png"), winnings_crop)
+                
+                # Coordinates for top 3 horses (1024x768 scale)
+                x2, x1, x3 = int(250 * mult_w), int(400 * mult_w), int(550 * mult_w)
+                y1, y2 = int(500 * mult_h), int(480 * mult_h)
+                h, w = int(53 * mult_h), int(85 * mult_w)
+                
+                finish_img = pyautogui.screenshot(region=(win_x, win_y, win_w, win_h))
+                finish_src = cv2.cvtColor(np.array(finish_img), cv2.COLOR_RGB2BGR)
+                
+                first_crop = finish_src[y2:y2+h, x1:x1+w]
+                second_crop = finish_src[y1:y1+h, x2:x2+w]
+                third_crop = finish_src[y1:y1+h, x3:x3+w]
+                
+                if DEBUG_MODE:
+                    timestamp = int(time.time())
+                    cv2.imwrite(os.path.join(DEBUG_DIR, f"debug_finish_screen_{timestamp}.png"), finish_src)
+                    cv2.imwrite(os.path.join(DEBUG_DIR, f"debug_first_place_{timestamp}.png"), first_crop)
+                    cv2.imwrite(os.path.join(DEBUG_DIR, f"debug_second_place_{timestamp}.png"), second_crop)
+                    cv2.imwrite(os.path.join(DEBUG_DIR, f"debug_third_place_{timestamp}.png"), third_crop)
+                
+                _, o1_str = read_odds(model, first_crop, 1)
+                _, o2_str = read_odds(model, second_crop, 2)
+                _, o3_str = read_odds(model, third_crop, 3)
+
+                print("Getting the odds of the first three horses:")
+                print(f"First place: {o1_str}")
+                print(f"Second place: {o2_str}")
+                print(f"Third place: {o3_str}")
+                
+                res, pred_str = read_odds(model, winnings_crop, 0)
+                
+                if res > 0:
+                    print(f"Winnings prediction: {res}")
+                    stats.winnings += res
+                    stats.races_won += 1
+                else:
+                    print(f"No winnings detected. Raw OCR: '{pred_str}'")
+                    stats.races_lost += 1
+
+                stats.print_stats()
+                exit()
+            except Exception as e:
+                print(f"Error during clicking phase: {e}")
         else:
-             print("No valid odds could be read. Refreshing...")
-             time.sleep(2)
+            print("No valid odds could be read. Refreshing...")
+            time.sleep(2)
 
         time.sleep(1)
 

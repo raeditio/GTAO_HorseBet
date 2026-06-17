@@ -4,3 +4,4 @@ pyautogui
 pathlib
 Pillow
 pywin32
+pydirectinput
