@@ -6,22 +6,27 @@ import time
 import os
 import win32gui
 import argparse
+import socket
+import webbrowser
+from dashboard import start_dashboard
 
-DEBUG_MODE = False
 DEBUG_DIR = "debug"
+
+if not os.path.exists(DEBUG_DIR):
+    os.makedirs(DEBUG_DIR)
+
+AUTOBET_DIR = os.path.join(os.path.expanduser('~'), 'Documents', 'autobet')
+if not os.path.exists(AUTOBET_DIR):
+    os.makedirs(AUTOBET_DIR)
+    
+SSL_DIR = os.path.join(AUTOBET_DIR, 'ssl')
+if not os.path.exists(SSL_DIR):
+    os.makedirs(SSL_DIR)
 
 # --- Argument Parsing ---
 arg_parser = argparse.ArgumentParser(description="GTA V Horse Betting Automation")
 arg_parser.add_argument('--debug', action='store_true', help="Enable debug mode to save intermediate images.")
 args = arg_parser.parse_args()
-DEBUG_MODE = args.debug
-
-if DEBUG_MODE and not os.path.exists(DEBUG_DIR):
-    os.makedirs(DEBUG_DIR)
-elif DEBUG_MODE:
-    # Empty directory
-    for f in os.listdir(DEBUG_DIR):
-        os.remove(os.path.join(DEBUG_DIR, f))
 
 # --- Global Stats Tracking ---
 class BettingStats:
@@ -29,16 +34,64 @@ class BettingStats:
         self.races_won = 0
         self.races_lost = 0
         self.winnings = 0
-        self.time_running = time.time()
+        self.total_time_running = 0
+        self.session_start_time = None
+        
+    def start_session(self):
+        if self.session_start_time is None:
+            self.session_start_time = time.time()
+            
+    def stop_session(self):
+        if self.session_start_time is not None:
+            self.total_time_running += time.time() - self.session_start_time
+            self.session_start_time = None
+            
+    def get_elapsed_time(self):
+        if self.session_start_time:
+            return self.total_time_running + (time.time() - self.session_start_time)
+        return self.total_time_running
         
     def print_stats(self):
-        elapsed = int(time.time() - self.time_running)
+        elapsed = int(self.get_elapsed_time())
         print(f"\n--- SESSION STATS ---")
         print(f"Races Won:  {self.races_won}")
         print(f"Races Lost: {self.races_lost}")
         print(f"Winnings:   {self.winnings}")
         print(f"Time Ran:   {elapsed // 60}m {elapsed % 60}s")
         print(f"---------------------\n")
+
+def get_available_ips():
+    try:
+        return ["0.0.0.0", "127.0.0.1"] + socket.gethostbyname_ex(socket.gethostname())[2]
+    except Exception:
+        return ["0.0.0.0", "127.0.0.1"]
+
+class BotState:
+    def __init__(self):
+        self.running = False
+        self.status = "Waiting for start..."
+        self.stats = BettingStats()
+        self.debug = False
+        self.web_hosting = True
+        self.game_running = False
+        self.host_ip = "0.0.0.0"
+        self.available_ips = get_available_ips()
+        
+    def set_running(self, is_running):
+        if is_running and not self.running:
+            self.stats.start_session()
+        elif not is_running and self.running:
+            self.stats.stop_session()
+        self.running = is_running
+
+bot_state = BotState()
+bot_state.debug = args.debug
+
+if bot_state.debug:
+    # Empty directory
+    for f in os.listdir(DEBUG_DIR):
+        try: os.remove(os.path.join(DEBUG_DIR, f))
+        except: pass
 
 def load_knn_model():
     """Loads and verifies the KNN model handling both native and manual YAML formats."""
@@ -147,7 +200,7 @@ def read_ocr_string(model, img, debug_prefix):
     # 2. Use Otsu's Thresholding (Creates White text on Black background)
     _, thresh = cv2.threshold(high_contrast, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     
-    if DEBUG_MODE:
+    if bot_state.debug:
         timestamp = int(time.time())
         filename = os.path.join(DEBUG_DIR, f"debug_{debug_prefix}_{timestamp}.png")
         cv2.imwrite(filename, thresh)
@@ -180,27 +233,6 @@ def read_ocr_string(model, img, debug_prefix):
         pred_val = int(results[0][0])
         pred_char = chr(pred_val) if 0 <= pred_val <= 255 else str(pred_val)
         
-        # # --- 0 vs 8 Disambiguation Heuristic ---
-        # # The KNN often confuses 0 and 8 when downscaled. 
-        # # We physically inspect the center pixels of the unscaled ROI to verify.
-        # if pred_char in ['0', '8', 'O', 'o']:
-        #     h_roi, w_roi = roi.shape
-        #     # Extract the center 30% of the character
-        #     cy_start, cy_end = int(h_roi * 0.35), int(h_roi * 0.65)
-        #     cx_start, cx_end = int(w_roi * 0.35), int(w_roi * 0.65)
-            
-        #     center_region = roi[cy_start:cy_end, cx_start:cx_end]
-        #     if center_region.size > 0:
-        #         # Calculate how much of the center is filled with white pixels
-        #         fill_ratio = cv2.countNonZero(center_region) / center_region.size
-                
-        #         # An '8' has a center crossbar (high fill ratio), a '0' is hollow (low fill ratio)
-        #         if fill_ratio > 0.23:
-        #             pred_char = '8'
-        #         else:
-        #             pred_char = '0'
-        # # ---------------------------------------
-
         detected_chars.append((x, pred_char))
 
     # Sort characters by X-coordinate to read left-to-right
@@ -251,20 +283,42 @@ def get_dynamic_boxes(width, height):
 
 def main_loop():
     model = load_knn_model()
-    stats = BettingStats()
     
     if model is None:
         print("Exiting due to model load failure.")
+        bot_state.status = "Failed to load model"
         return
+        
+    consecutive_read_failures = 0
+    was_running = False
 
     while True:
         hwnd, win_x, win_y, win_w, win_h = get_gta_window_info()
+        bot_state.game_running = bool(hwnd)
         
-        if not hwnd or win32gui.GetForegroundWindow() != hwnd:
-            print("GTA V is not active or minimized. Waiting...")
-            time.sleep(2)
+        if not bot_state.running:
+            if bot_state.status not in ["Stopped (GTA lost focus)", "Failed to load model"]:
+                bot_state.status = "Paused - Ready to Start"
+            was_running = False
+            time.sleep(1)
             continue
 
+        if not was_running:
+            bot_state.status = "Starting in 5s... Switch to GTA!"
+            print("Starting in 5 seconds... Switch to GTA V!")
+            time.sleep(5)
+            was_running = True
+        
+        if not hwnd or win32gui.GetForegroundWindow() != hwnd:
+            print("GTA V lost focus. Stopping automation.")
+            bot_state.set_running(False)
+            bot_state.status = "Stopped (GTA lost focus)"
+            was_running = False
+            
+            time.sleep(1)
+            continue
+
+        bot_state.status = "Reading Odds"
         print(f"\nTaking screenshot of game window... ({win_w}x{win_h})")
         screenshot = pyautogui.screenshot(region=(win_x, win_y, win_w, win_h))
         frame = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
@@ -302,6 +356,7 @@ def main_loop():
         print("---------------------\n")
         
         if valid_odds_found: 
+            consecutive_read_failures = 0
             print(f"-> Most probable choice: Horse {best_horse_idx + 1} ({best_prob:.1f}% chance)")
             try:
                 target_box = dynamic_boxes[best_horse_idx]
@@ -328,7 +383,20 @@ def main_loop():
                 pydirectinput.mouseUp()
                 
                 print("Bet placed. Waiting for race to finish (~34s)...")
-                time.sleep(34)
+                bot_state.status = "Waiting for race to finish (~34s)"
+                
+                interrupted = False
+                for _ in range(34):
+                    if not bot_state.running or win32gui.GetForegroundWindow() != hwnd:
+                        bot_state.set_running(False)
+                        bot_state.status = "Stopped (GTA lost focus)"
+                        interrupted = True
+                        break
+                    time.sleep(1)
+                    
+                if interrupted:
+                    was_running = False
+                    continue
 
                 # Get the winnings using the 1024x768 baseline modifiers
                 mult_w = win_w / 1024.0
@@ -343,7 +411,7 @@ def main_loop():
                 winnings_img = pyautogui.screenshot(region=(win_x + x_coord, win_y + y_coord, w_coord, h_coord))
                 winnings_crop = cv2.cvtColor(np.array(winnings_img), cv2.COLOR_RGB2BGR)
 
-                if DEBUG_MODE:
+                if bot_state.debug:
                     cv2.imwrite(os.path.join(DEBUG_DIR, f"debug_winnings_{int(time.time())}.png"), winnings_crop)
                 
                 # Coordinates for top 3 horses (1024x768 scale)
@@ -359,7 +427,7 @@ def main_loop():
                     winnings_img = pyautogui.screenshot(region=(win_x + x_coord, win_y + y_coord, w_coord, h_coord))
                     winnings_crop = cv2.cvtColor(np.array(winnings_img), cv2.COLOR_RGB2BGR)
 
-                    if DEBUG_MODE:
+                    if bot_state.debug:
                         cv2.imwrite(os.path.join(DEBUG_DIR, f"debug_winnings_{int(time.time())}.png"), winnings_crop)
                     
                     finish_img = pyautogui.screenshot(region=(win_x, win_y, win_w, win_h))
@@ -369,7 +437,7 @@ def main_loop():
                     second_crop = finish_src[y2:y2+h, x2:x2+w]
                     third_crop = finish_src[y2:y2+h, x3:x3+w]
                     
-                    if DEBUG_MODE:
+                    if bot_state.debug:
                         timestamp = int(time.time())
                         cv2.imwrite(os.path.join(DEBUG_DIR, f"debug_finish_screen_{timestamp}.png"), finish_src)
                         cv2.imwrite(os.path.join(DEBUG_DIR, f"debug_first_place_{timestamp}.png"), first_crop)
@@ -409,13 +477,19 @@ def main_loop():
                     else:
                         print(f"Winnings prediction: {res} [Raw OCR: '{pred_str}']")
                         
-                    stats.winnings += res
-                    stats.races_won += 1
+                    bot_state.stats.winnings += res
+                    bot_state.stats.races_won += 1
                 else:
                     print(f"No winnings detected. Raw OCR: '{pred_str}'")
-                    stats.races_lost += 1
+                    bot_state.stats.races_lost += 1
 
-                stats.print_stats()
+                bot_state.stats.print_stats()
+                
+                if win32gui.GetForegroundWindow() != hwnd:
+                    bot_state.set_running(False)
+                    bot_state.status = "Stopped (GTA lost focus)"
+                    was_running = False
+                    continue
                 
                 # Click "Place Bet" button (Converted to 1024x768 baseline)
                 button2_x = win_x + win_w // 2
@@ -428,15 +502,64 @@ def main_loop():
                 pydirectinput.moveTo(int(button3_x), int(button3_y))
                 pydirectinput.mouseDown()
                 pydirectinput.mouseUp()
-                exit()
+                time.sleep(2)
                 
             except Exception as e:
                 print(f"Error during clicking phase: {e}")
         else:
-            print("No valid odds could be read. Refreshing...")
+            consecutive_read_failures += 1
+            print(f"No valid odds could be read. Refreshing... (Attempt {consecutive_read_failures}/5)")
+            
+            if consecutive_read_failures >= 5:
+                print("Failsafe triggered: Attempting to clear stuck screen...")
+                bot_state.status = "Running Failsafe..."
+                
+                if win32gui.GetForegroundWindow() != hwnd:
+                    bot_state.set_running(False)
+                    bot_state.status = "Stopped (GTA lost focus)"
+                    was_running = False
+                    continue
+                    
+                try:
+                    mult_w = win_w / 1024.0
+                    mult_h = win_h / 768.0
+                    
+                    button2_x = win_x + win_w // 2
+                    button2_y = win_y + int(705 * mult_h)
+                    pydirectinput.moveTo(int(button2_x), int(button2_y))
+                    pydirectinput.mouseDown()
+                    pydirectinput.mouseUp()
+                    time.sleep(1)
+                    
+                    button3_x = win_x + win_w * 3 // 4
+                    button3_y = win_y + int(605 * mult_h)
+                    pydirectinput.moveTo(int(button3_x), int(button3_y))
+                    pydirectinput.mouseDown()
+                    pydirectinput.mouseUp()
+                except Exception as e:
+                    print(f"Error during failsafe phase: {e}")
+                    
+                consecutive_read_failures = 0
+                
             time.sleep(2)
 
         time.sleep(1)
 
 if __name__ == "__main__":
+    host_ip = "0.0.0.0"
+    
+    cert_pem_path = os.path.join(SSL_DIR, 'cert.pem')
+    cert_crt_path = os.path.join(SSL_DIR, 'cert.crt')
+    key_path = os.path.join(SSL_DIR, 'key.pem')
+    
+    if (os.path.exists(cert_pem_path) or os.path.exists(cert_crt_path)) and os.path.exists(key_path):
+        protocol = "https"
+    else:
+        protocol = "http"
+        
+    browse_url = f"{protocol}://127.0.0.1:8027"
+    print(f"Opening Dashboard in browser: {browse_url}")
+    webbrowser.open(browse_url)
+    
+    start_dashboard(bot_state, host_ip)
     main_loop()
