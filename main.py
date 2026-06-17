@@ -24,14 +24,14 @@ def get_base_path():
         return os.path.dirname(sys.executable)
     return os.path.dirname(os.path.abspath(__file__))
 
-DEBUG_DIR = "debug"
-
-if not os.path.exists(DEBUG_DIR):
-    os.makedirs(DEBUG_DIR)
-
 AUTOBET_DIR = os.path.join(os.path.expanduser('~'), 'Documents', 'autobet')
 if not os.path.exists(AUTOBET_DIR):
     os.makedirs(AUTOBET_DIR)
+    
+DEBUG_DIR = os.path.join(AUTOBET_DIR, 'debug')
+
+if not os.path.exists(DEBUG_DIR):
+    os.makedirs(DEBUG_DIR)
     
 SSL_DIR = os.path.join(AUTOBET_DIR, 'ssl')
 if not os.path.exists(SSL_DIR):
