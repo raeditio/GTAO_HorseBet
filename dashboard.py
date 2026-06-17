@@ -378,7 +378,11 @@ HTML_TEMPLATE = """
             <div class="stat-label">Wins</div>
             <div id="races_won" class="stat-value accent-green">0</div>
         </div>
-        <div class="stat-box" style="grid-column: span 2;">
+        <div class="stat-box">
+            <div class="stat-label">Total</div>
+            <div id="races_total" class="stat-value accent-primary">0</div>
+        </div>
+        <div class="stat-box">
             <div class="stat-label">Win Rate</div>
             <div id="win_prob" class="stat-value accent-primary">0%</div>
         </div>
@@ -463,6 +467,7 @@ HTML_TEMPLATE = """
                 document.getElementById('races_won').innerText = data.races_won;
                 
                 const total_races = data.races_won + data.races_lost;
+                document.getElementById('races_total').innerText = total_races;
                 document.getElementById('win_prob').innerText = total_races > 0 ? ((data.races_won / total_races) * 100).toFixed(1) + '%' : '0%';
                 
                 const startBtn = document.getElementById('start-btn');
@@ -534,6 +539,13 @@ def start_dashboard(bot_state, host_ip='0.0.0.0', ssl_dir=None):
                 host_connected = request.host.split(':')[0]
                 if host_connected != '127.0.0.1' and host_connected != bot_state.host_ip:
                     abort(403)
+
+    @app.after_request
+    def add_header(response):
+        response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+        return response
 
     @app.route('/')
     def index(): return render_template_string(HTML_TEMPLATE)

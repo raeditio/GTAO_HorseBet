@@ -66,6 +66,13 @@ class BettingStats:
         self.total_time_running = 0
         self.session_start_time = None
         
+    def reset(self):
+        self.races_won = 0
+        self.races_lost = 0
+        self.winnings = 0
+        self.total_time_running = 0
+        self.session_start_time = None
+        
     def start_session(self):
         if self.session_start_time is None:
             self.session_start_time = time.time()
@@ -108,6 +115,7 @@ class BotState:
         
     def set_running(self, is_running):
         if is_running and not self.running:
+            self.stats.reset()
             self.stats.start_session()
         elif not is_running and self.running:
             self.stats.stop_session()
@@ -343,9 +351,12 @@ def main_loop():
             continue
 
         if not was_running:
-            bot_state.status = "Starting in 5s... Switch to GTA!"
-            print("Starting in 5 seconds... Switch to GTA V!")
-            time.sleep(5)
+            if hwnd and win32gui.GetForegroundWindow() == hwnd:
+                print("Starting immediately...")
+            else:
+                bot_state.status = "Starting in 5s... Switch to GTA!"
+                print("Starting in 5 seconds... Switch to GTA V!")
+                time.sleep(5)
             was_running = True
         
         if not hwnd or win32gui.GetForegroundWindow() != hwnd:
@@ -520,6 +531,7 @@ def main_loop():
                     bot_state.stats.races_won += 1
                 else:
                     print(f"No winnings detected. Raw OCR: '{pred_str}'")
+                    bot_state.stats.winnings -= 10000
                     bot_state.stats.races_lost += 1
 
                 bot_state.stats.print_stats()
@@ -541,7 +553,6 @@ def main_loop():
                 pydirectinput.moveTo(int(button3_x), int(button3_y))
                 pydirectinput.mouseDown()
                 pydirectinput.mouseUp()
-                time.sleep(2)
                 
             except Exception as e:
                 print(f"Error during clicking phase: {e}")
@@ -582,7 +593,7 @@ def main_loop():
                 
             time.sleep(2)
 
-        time.sleep(1)
+        # time.sleep(1)
 
 if __name__ == "__main__":
     host_ip = "0.0.0.0"
@@ -616,7 +627,8 @@ if __name__ == "__main__":
         icon_path = os.path.join(get_resource_path(), 'resources', 'icon.ico')
         icon_path = icon_path if os.path.exists(icon_path) else None
         
-        window = webview.create_window('AutoBet', browse_url, width=750, height=900, background_color='#11111b')
+        app_url = f"{browse_url}/?t={int(time.time())}"
+        window = webview.create_window('AutoBet', app_url, width=750, height=900, background_color='#11111b')
         webview.start(icon=icon_path)
     else:
         print(f"Opening Dashboard in browser: {browse_url}")
