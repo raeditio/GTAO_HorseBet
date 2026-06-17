@@ -344,7 +344,7 @@ HTML_TEMPLATE = """
         <div class="header-left">
             <div class="header-icon">🏇</div>
             <div>
-                <div class="header-title">HorseBet</div>
+                <div class="header-title">AutoBet</div>
                 <div class="header-sub">GTAO Automation</div>
             </div>
         </div>
@@ -519,7 +519,7 @@ HTML_TEMPLATE = """
 </html>
 """
 
-def start_dashboard(bot_state, host_ip='0.0.0.0'):
+def start_dashboard(bot_state, host_ip='0.0.0.0', ssl_dir=None):
     app = Flask(__name__)
 
     @app.before_request
@@ -565,25 +565,27 @@ def start_dashboard(bot_state, host_ip='0.0.0.0'):
         return jsonify({"success": True})
 
     def run_flask_app():
-        autobet_dir = os.path.join(os.path.expanduser('~'), 'Documents', 'autobet')
-        ssl_dir = os.path.join(autobet_dir, 'ssl')
+        local_ssl_dir = ssl_dir
+        if local_ssl_dir is None:
+            autobet_dir = os.path.join(os.path.expanduser('~'), 'Documents', 'autobet')
+            local_ssl_dir = os.path.join(autobet_dir, 'ssl')
         
         cert_path = None
         key_path = None
         
-        if os.path.exists(ssl_dir):
-            for f in os.listdir(ssl_dir):
+        if os.path.exists(local_ssl_dir):
+            for f in os.listdir(local_ssl_dir):
                 if f.endswith('.key') or (f.endswith('.pem') and 'key' in f.lower()):
-                    key_path = os.path.join(ssl_dir, f)
+                    key_path = os.path.join(local_ssl_dir, f)
                 elif f.endswith(('.crt', '.cer')) or (f.endswith('.pem') and 'key' not in f.lower()):
-                    cert_path = os.path.join(ssl_dir, f)
+                    cert_path = os.path.join(local_ssl_dir, f)
 
         if cert_path and key_path:
-            print(f"\n[SSL INFO] Found certificates in {ssl_dir}. Starting with HTTPS.")
+            print(f"\n[SSL INFO] Found certificates in {local_ssl_dir}. Starting with HTTPS.")
             ssl_context = (cert_path, key_path)
             app.run(host=host_ip, port=8027, debug=False, use_reloader=False, ssl_context=ssl_context)
         else:
-            print(f"\n[SSL WARNING] No certificates found in '{ssl_dir}'.")
+            print(f"\n[SSL WARNING] No certificates found in '{local_ssl_dir}'.")
             print("[SSL WARNING] To enable HTTPS, place 'cert.pem' (or .crt) and 'key.pem' in that folder.")
             print("[SSL WARNING] Falling back to HTTP.\n")
             app.run(host=host_ip, port=8027, debug=False, use_reloader=False)

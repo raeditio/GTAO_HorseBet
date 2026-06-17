@@ -18,6 +18,12 @@ try:
 except ImportError:
     USE_WEBVIEW = False
 
+def get_resource_path():
+    """Get the absolute path to bundled resources."""
+    if getattr(sys, 'frozen', False):
+        return getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
 def get_base_path():
     """Get the absolute path to the executable or script location."""
     if getattr(sys, 'frozen', False):
@@ -25,17 +31,26 @@ def get_base_path():
     return os.path.dirname(os.path.abspath(__file__))
 
 AUTOBET_DIR = os.path.join(os.path.expanduser('~'), 'Documents', 'autobet')
-if not os.path.exists(AUTOBET_DIR):
-    os.makedirs(AUTOBET_DIR)
-    
-DEBUG_DIR = os.path.join(AUTOBET_DIR, 'debug')
-
-if not os.path.exists(DEBUG_DIR):
-    os.makedirs(DEBUG_DIR)
-    
-SSL_DIR = os.path.join(AUTOBET_DIR, 'ssl')
-if not os.path.exists(SSL_DIR):
-    os.makedirs(SSL_DIR)
+try:
+    os.makedirs(AUTOBET_DIR, exist_ok=True)
+    DEBUG_DIR = os.path.join(AUTOBET_DIR, 'debug')
+    os.makedirs(DEBUG_DIR, exist_ok=True)
+    SSL_DIR = os.path.join(AUTOBET_DIR, 'ssl')
+    os.makedirs(SSL_DIR, exist_ok=True)
+except Exception as e:
+    print(f"Warning: Could not create directories in Documents ({e}).")
+    print("Falling back to local application directory.")
+    AUTOBET_DIR = os.path.join(get_base_path(), 'autobet')
+    try:
+        os.makedirs(AUTOBET_DIR, exist_ok=True)
+    except Exception:
+        AUTOBET_DIR = os.path.join(os.environ.get('LOCALAPPDATA', os.path.expanduser('~')), 'AutoBet_Data')
+        os.makedirs(AUTOBET_DIR, exist_ok=True)
+        
+    DEBUG_DIR = os.path.join(AUTOBET_DIR, 'debug')
+    os.makedirs(DEBUG_DIR, exist_ok=True)
+    SSL_DIR = os.path.join(AUTOBET_DIR, 'ssl')
+    os.makedirs(SSL_DIR, exist_ok=True)
 
 # --- Argument Parsing ---
 arg_parser = argparse.ArgumentParser(description="GTA V Horse Betting Automation")
@@ -109,7 +124,7 @@ if bot_state.debug:
 
 def load_knn_model():
     """Loads and verifies the KNN model handling both native and manual YAML formats."""
-    filepath = os.path.join(get_base_path(), 'resources', 'data', 'model.yml')
+    filepath = os.path.join(get_resource_path(), 'resources', 'data', 'model.yml')
     
     if not os.path.exists(filepath):
         print(f"Error: Model file not found at '{filepath}'")
@@ -128,6 +143,12 @@ def load_knn_model():
     try:
         print("Native ML load failed/unsupported. Attempting manual matrix extraction...")
         fs = cv2.FileStorage(filepath, cv2.FILE_STORAGE_READ)
+        if not fs.isOpened():
+            print("Trying in-memory load for potential path encoding issues...")
+            with open(filepath, 'r', encoding='utf-8') as f:
+                yaml_data = f.read()
+            fs = cv2.FileStorage(yaml_data, cv2.FILE_STORAGE_READ | cv2.FILE_STORAGE_MEMORY)
+            
         if not fs.isOpened():
             print("Error: Could not open model.yml for manual parsing.")
             return None
@@ -300,7 +321,11 @@ def main_loop():
     
     if model is None:
         print("Exiting due to model load failure.")
-        bot_state.status = "Failed to load model"
+        filepath = os.path.join(get_resource_path(), 'resources', 'data', 'model.yml')
+        if not os.path.exists(filepath):
+            bot_state.status = "Model file not found"
+        else:
+            bot_state.status = "Failed to load model data"
         return
         
     consecutive_read_failures = 0
@@ -581,22 +606,22 @@ if __name__ == "__main__":
     
     if USE_WEBVIEW:
         print(f"Opening Dashboard in App Window: {browse_url}")
-        start_dashboard(bot_state, host_ip)
+        start_dashboard(bot_state, host_ip, SSL_DIR)
         
         # Move the bot loop to a background thread so the GUI can run on the main thread
         bot_thread = threading.Thread(target=main_loop, daemon=True)
         bot_thread.start()
         
         # Set custom window icon if provided
-        icon_path = os.path.join(get_base_path(), 'resources', 'icon.ico')
+        icon_path = os.path.join(get_resource_path(), 'resources', 'icon.ico')
         icon_path = icon_path if os.path.exists(icon_path) else None
         
-        window = webview.create_window('GTAO HorseBet', browse_url, width=750, height=900, background_color='#11111b')
+        window = webview.create_window('AutoBet', browse_url, width=750, height=900, background_color='#11111b')
         webview.start(icon=icon_path)
     else:
         print(f"Opening Dashboard in browser: {browse_url}")
         print("[INFO] Install 'pywebview' (pip install pywebview) to open the dashboard as a standalone application.")
         webbrowser.open(browse_url)
         
-        start_dashboard(bot_state, host_ip)
+        start_dashboard(bot_state, host_ip, SSL_DIR)
         main_loop()
