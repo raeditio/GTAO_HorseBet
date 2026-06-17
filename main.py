@@ -93,7 +93,7 @@ def load_knn_model():
         return None
 
 def parse_odds(pred_str):
-    """Translates the string prediction to a short/int."""
+    """Translates the OCR string prediction into a mathematical odds numerator."""
     pred = pred_str.strip().lower()
     
     # Common OCR mistakes compensation
@@ -117,8 +117,28 @@ def parse_odds(pred_str):
     except ValueError:
         return -1
 
-def read_odds(model, img, horse_index):
-    """Reads the odds by parsing individual character contours."""
+def parse_winnings(pred_str):
+    """Translates the OCR string prediction into a winnings integer."""
+    pred = pred_str.strip().lower()
+    
+    # Common OCR mistakes compensation for numbers
+    pred = pred.replace('o', '0').replace('l', '1').replace('i', '1').replace('s', '5')
+    
+    # Extract only digits (removes slashes, spaces, commas, letters, etc)
+    digits = ''.join(filter(str.isdigit, pred))
+    if digits:
+        return int(digits)
+    return -1
+
+def read_ocr_string(model, img, debug_prefix):
+    """Reads the raw text from an image by parsing individual upscaled character contours."""
+    
+    # --- UPSCALE PRE-PROCESSING ---
+    # Upscale the raw crop by 5x using Cubic interpolation. 
+    # This heavily improves edge smoothing and helps Otsu's thresholding isolate characters better.
+    upscale_factor = 5
+    img = cv2.resize(img, (0, 0), fx=upscale_factor, fy=upscale_factor, interpolation=cv2.INTER_CUBIC)
+    
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     
     # 1. Increase contrast significantly
@@ -129,16 +149,19 @@ def read_odds(model, img, horse_index):
     
     if DEBUG_MODE:
         timestamp = int(time.time())
-        filename = os.path.join(DEBUG_DIR, f"debug_horse{horse_index}_{timestamp}.png")
+        filename = os.path.join(DEBUG_DIR, f"debug_{debug_prefix}_{timestamp}.png")
         cv2.imwrite(filename, thresh)
         
     # findContours NEEDS White text on a Black background to work
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     detected_chars = []
     
+    # Because we upscaled the image, the minimum contour area (noise filter) needs to scale accordingly
+    min_contour_area = 5 * (upscale_factor * upscale_factor)
+    
     for c in contours:
         x, y, w, h = cv2.boundingRect(c)
-        if w * h < 5:  
+        if w * h < min_contour_area:  
             continue
             
         # Crop the White-on-Black character
@@ -148,7 +171,7 @@ def read_odds(model, img, horse_index):
         # The KNN model was trained on Black text on a White background.
         roi_inverted = cv2.bitwise_not(roi)
         
-        # Resize to 10x10 to match the 100 columns expected by model.yml
+        # Resize to 10x10 to match the 100 columns expected by model.yml (THIS MUST STAY 10x10)
         resized = cv2.resize(roi_inverted, (10, 10))
         sample = resized.reshape((1, -1)).astype(np.float32)
         
@@ -157,26 +180,26 @@ def read_odds(model, img, horse_index):
         pred_val = int(results[0][0])
         pred_char = chr(pred_val) if 0 <= pred_val <= 255 else str(pred_val)
         
-        # --- 0 vs 8 Disambiguation Heuristic ---
-        # The KNN often confuses 0 and 8 when downscaled. 
-        # We physically inspect the center pixels of the unscaled ROI to verify.
-        if pred_char in ['0', '8', 'O', 'o']:
-            h_roi, w_roi = roi.shape
-            # Extract the center 30% of the character
-            cy_start, cy_end = int(h_roi * 0.35), int(h_roi * 0.65)
-            cx_start, cx_end = int(w_roi * 0.35), int(w_roi * 0.65)
+        # # --- 0 vs 8 Disambiguation Heuristic ---
+        # # The KNN often confuses 0 and 8 when downscaled. 
+        # # We physically inspect the center pixels of the unscaled ROI to verify.
+        # if pred_char in ['0', '8', 'O', 'o']:
+        #     h_roi, w_roi = roi.shape
+        #     # Extract the center 30% of the character
+        #     cy_start, cy_end = int(h_roi * 0.35), int(h_roi * 0.65)
+        #     cx_start, cx_end = int(w_roi * 0.35), int(w_roi * 0.65)
             
-            center_region = roi[cy_start:cy_end, cx_start:cx_end]
-            if center_region.size > 0:
-                # Calculate how much of the center is filled with white pixels
-                fill_ratio = cv2.countNonZero(center_region) / center_region.size
+        #     center_region = roi[cy_start:cy_end, cx_start:cx_end]
+        #     if center_region.size > 0:
+        #         # Calculate how much of the center is filled with white pixels
+        #         fill_ratio = cv2.countNonZero(center_region) / center_region.size
                 
-                # An '8' has a center crossbar (high fill ratio), a '0' is hollow (low fill ratio)
-                if fill_ratio > 0.2:
-                    pred_char = '8'
-                else:
-                    pred_char = '0'
-        # ---------------------------------------
+        #         # An '8' has a center crossbar (high fill ratio), a '0' is hollow (low fill ratio)
+        #         if fill_ratio > 0.23:
+        #             pred_char = '8'
+        #         else:
+        #             pred_char = '0'
+        # # ---------------------------------------
 
         detected_chars.append((x, pred_char))
 
@@ -184,7 +207,7 @@ def read_odds(model, img, horse_index):
     detected_chars.sort(key=lambda item: item[0])
     pred_str = "".join([char for x, char in detected_chars])
     
-    return parse_odds(pred_str), pred_str
+    return pred_str
 
 def get_gta_window_info():
     """Gets GTA V actual rendering bounds, ignoring Windows title bars and borders."""
@@ -252,7 +275,9 @@ def main_loop():
         raw_list = []
         for i, (x, y, w, h) in enumerate(dynamic_boxes):
             crop = frame[y:y+h, x:x+w]
-            odds, raw_str = read_odds(model, crop, i + 1)
+            raw_str = read_ocr_string(model, crop, f"horse{i+1}")
+            odds = parse_odds(raw_str)
+            
             odds_list.append(odds)
             raw_list.append(raw_str)
             
@@ -293,7 +318,7 @@ def main_loop():
                 
                 pydirectinput.keyDown('tab')
                 pydirectinput.keyUp('tab')
-                print("Pressed Tab")
+                print("Bet Maxed")
                 
                 # Click "Place Bet" button (Converted to 1024x768 baseline)
                 button_x = win_x + (656 / 1024.0) * win_w
@@ -311,8 +336,8 @@ def main_loop():
                 
                 y_coord = int(500 * mult_h)
                 h_coord = int(57 * mult_h)
-                x_coord = int(500 * mult_w)
-                w_coord = int(162 * mult_w)
+                x_coord = int(510 * mult_w)
+                w_coord = int(150 * mult_w)
                 
                 print("Checking for winnings...")
                 winnings_img = pyautogui.screenshot(region=(win_x + x_coord, win_y + y_coord, w_coord, h_coord))
@@ -322,37 +347,68 @@ def main_loop():
                     cv2.imwrite(os.path.join(DEBUG_DIR, f"debug_winnings_{int(time.time())}.png"), winnings_crop)
                 
                 # Coordinates for top 3 horses (1024x768 scale)
-                x2, x1, x3 = int(250 * mult_w), int(400 * mult_w), int(550 * mult_w)
-                y1, y2 = int(500 * mult_h), int(480 * mult_h)
+                x2, x1, x3 = int(15 * mult_w), int(365 * mult_w), int(735 * mult_w)
+                y1, y2 = int(500 * mult_h), int(485 * mult_h)
                 h, w = int(53 * mult_h), int(85 * mult_w)
                 
-                finish_img = pyautogui.screenshot(region=(win_x, win_y, win_w, win_h))
-                finish_src = cv2.cvtColor(np.array(finish_img), cv2.COLOR_RGB2BGR)
-                
-                first_crop = finish_src[y2:y2+h, x1:x1+w]
-                second_crop = finish_src[y1:y1+h, x2:x2+w]
-                third_crop = finish_src[y1:y1+h, x3:x3+w]
-                
-                if DEBUG_MODE:
-                    timestamp = int(time.time())
-                    cv2.imwrite(os.path.join(DEBUG_DIR, f"debug_finish_screen_{timestamp}.png"), finish_src)
-                    cv2.imwrite(os.path.join(DEBUG_DIR, f"debug_first_place_{timestamp}.png"), first_crop)
-                    cv2.imwrite(os.path.join(DEBUG_DIR, f"debug_second_place_{timestamp}.png"), second_crop)
-                    cv2.imwrite(os.path.join(DEBUG_DIR, f"debug_third_place_{timestamp}.png"), third_crop)
-                
-                _, o1_str = read_odds(model, first_crop, 1)
-                _, o2_str = read_odds(model, second_crop, 2)
-                _, o3_str = read_odds(model, third_crop, 3)
+                def is_valid_odds(val, text):
+                    return val > 0 and ('/' in text or 'even' in text.lower() or 'evn' in text.lower() or 'eve' in text.lower())
 
-                print("Getting the odds of the first three horses:")
-                print(f"First place: {o1_str}")
-                print(f"Second place: {o2_str}")
-                print(f"Third place: {o3_str}")
+                for attempt in range(3):
+                    print(f"Checking for winnings... (Attempt {attempt + 1})")
+                    winnings_img = pyautogui.screenshot(region=(win_x + x_coord, win_y + y_coord, w_coord, h_coord))
+                    winnings_crop = cv2.cvtColor(np.array(winnings_img), cv2.COLOR_RGB2BGR)
+
+                    if DEBUG_MODE:
+                        cv2.imwrite(os.path.join(DEBUG_DIR, f"debug_winnings_{int(time.time())}.png"), winnings_crop)
+                    
+                    finish_img = pyautogui.screenshot(region=(win_x, win_y, win_w, win_h))
+                    finish_src = cv2.cvtColor(np.array(finish_img), cv2.COLOR_RGB2BGR)
+                    
+                    first_crop = finish_src[y1:y1+h, x1:x1+w]
+                    second_crop = finish_src[y2:y2+h, x2:x2+w]
+                    third_crop = finish_src[y2:y2+h, x3:x3+w]
+                    
+                    if DEBUG_MODE:
+                        timestamp = int(time.time())
+                        cv2.imwrite(os.path.join(DEBUG_DIR, f"debug_finish_screen_{timestamp}.png"), finish_src)
+                        cv2.imwrite(os.path.join(DEBUG_DIR, f"debug_first_place_{timestamp}.png"), first_crop)
+                        cv2.imwrite(os.path.join(DEBUG_DIR, f"debug_second_place_{timestamp}.png"), second_crop)
+                        cv2.imwrite(os.path.join(DEBUG_DIR, f"debug_third_place_{timestamp}.png"), third_crop)
+                    
+                    o1_str = read_ocr_string(model, first_crop, "first_place")
+                    o1_val = parse_odds(o1_str)
+                    
+                    o2_str = read_ocr_string(model, second_crop, "second_place")
+                    o2_val = parse_odds(o2_str)
+                    
+                    o3_str = read_ocr_string(model, third_crop, "third_place")
+                    o3_val = parse_odds(o3_str)
+
+                    print("Getting the odds of the first three horses:")
+                    print(f"First place: {o1_str}")
+                    print(f"Second place: {o2_str}")
+                    print(f"Third place: {o3_str}")
+                    
+                    if is_valid_odds(o1_val, o1_str) and is_valid_odds(o2_val, o2_str) and is_valid_odds(o3_val, o3_str):
+                        break
+                        
+                    if attempt < 2:
+                        print("Finish screen odds are unreadable or not fractions/evens. Retrying in 2 seconds...")
+                        time.sleep(2)
                 
-                res, pred_str = read_odds(model, winnings_crop, 0)
+                # Reading and parsing winnings accurately
+                pred_str = read_ocr_string(model, winnings_crop, "winnings")
+                res = parse_winnings(pred_str)
                 
-                if res > 0:
-                    print(f"Winnings prediction: {res}")
+                if res > 0 or '+' in pred_str:
+                    expected_winnings = 10000 * (odds_list[best_horse_idx] + 1)
+                    if res != expected_winnings:
+                        print(f"Winnings prediction misread as {res}. Overriding to expected math: {expected_winnings} [Raw OCR: '{pred_str}']")
+                        res = expected_winnings
+                    else:
+                        print(f"Winnings prediction: {res} [Raw OCR: '{pred_str}']")
+                        
                     stats.winnings += res
                     stats.races_won += 1
                 else:
@@ -360,7 +416,20 @@ def main_loop():
                     stats.races_lost += 1
 
                 stats.print_stats()
+                
+                # Click "Place Bet" button (Converted to 1024x768 baseline)
+                button2_x = win_x + win_w // 2
+                button2_y = win_y + int(705 * mult_h)
+                pydirectinput.moveTo(int(button2_x), int(button2_y))
+                pydirectinput.mouseDown()
+                pydirectinput.mouseUp()
+                button3_x = win_x + win_w * 3 // 4
+                button3_y = win_y + int(605 * mult_h)
+                pydirectinput.moveTo(int(button3_x), int(button3_y))
+                pydirectinput.mouseDown()
+                pydirectinput.mouseUp()
                 exit()
+                
             except Exception as e:
                 print(f"Error during clicking phase: {e}")
         else:
