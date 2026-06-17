@@ -8,7 +8,21 @@ import win32gui
 import argparse
 import socket
 import webbrowser
+import sys
+import threading
 from dashboard import start_dashboard
+
+try:
+    import webview
+    USE_WEBVIEW = True
+except ImportError:
+    USE_WEBVIEW = False
+
+def get_base_path():
+    """Get the absolute path to the executable or script location."""
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
 
 DEBUG_DIR = "debug"
 
@@ -95,7 +109,7 @@ if bot_state.debug:
 
 def load_knn_model():
     """Loads and verifies the KNN model handling both native and manual YAML formats."""
-    filepath = 'resources/data/model.yml'
+    filepath = os.path.join(get_base_path(), 'resources', 'data', 'model.yml')
     
     if not os.path.exists(filepath):
         print(f"Error: Model file not found at '{filepath}'")
@@ -548,18 +562,41 @@ def main_loop():
 if __name__ == "__main__":
     host_ip = "0.0.0.0"
     
-    cert_pem_path = os.path.join(SSL_DIR, 'cert.pem')
-    cert_crt_path = os.path.join(SSL_DIR, 'cert.crt')
-    key_path = os.path.join(SSL_DIR, 'key.pem')
+    cert_path = None
+    key_path = None
     
-    if (os.path.exists(cert_pem_path) or os.path.exists(cert_crt_path)) and os.path.exists(key_path):
+    if os.path.exists(SSL_DIR):
+        for f in os.listdir(SSL_DIR):
+            if f.endswith('.key') or (f.endswith('.pem') and 'key' in f.lower()):
+                key_path = os.path.join(SSL_DIR, f)
+            elif f.endswith(('.crt', '.cer')) or (f.endswith('.pem') and 'key' not in f.lower()):
+                cert_path = os.path.join(SSL_DIR, f)
+                
+    if cert_path and key_path:
         protocol = "https"
     else:
         protocol = "http"
         
     browse_url = f"{protocol}://127.0.0.1:8027"
-    print(f"Opening Dashboard in browser: {browse_url}")
-    webbrowser.open(browse_url)
     
-    start_dashboard(bot_state, host_ip)
-    main_loop()
+    if USE_WEBVIEW:
+        print(f"Opening Dashboard in App Window: {browse_url}")
+        start_dashboard(bot_state, host_ip)
+        
+        # Move the bot loop to a background thread so the GUI can run on the main thread
+        bot_thread = threading.Thread(target=main_loop, daemon=True)
+        bot_thread.start()
+        
+        # Set custom window icon if provided
+        icon_path = os.path.join(get_base_path(), 'resources', 'icon.ico')
+        icon_path = icon_path if os.path.exists(icon_path) else None
+        
+        window = webview.create_window('GTAO HorseBet', browse_url, width=750, height=900, background_color='#11111b')
+        webview.start(icon=icon_path)
+    else:
+        print(f"Opening Dashboard in browser: {browse_url}")
+        print("[INFO] Install 'pywebview' (pip install pywebview) to open the dashboard as a standalone application.")
+        webbrowser.open(browse_url)
+        
+        start_dashboard(bot_state, host_ip)
+        main_loop()

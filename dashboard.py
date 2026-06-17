@@ -9,126 +9,430 @@ HTML_TEMPLATE = """
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>GTAO HorseBet Control Panel</title>
-
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
-        :root { 
-            --bg: #11111b; 
-            --surface: rgba(30, 30, 46, 0.6); 
-            --surface2: rgba(49, 50, 68, 0.4); 
-            --text: #cdd6f4; 
-            --text-dim: #a6adc8;
-            --primary: #89b4fa; 
-            --danger: #f38ba8; 
-            --success: #a6e3a1; 
-            --warning: #f9e2af; 
+        :root {
+            --bg:        #07070f;
+            --surface:   #0e0e1c;
+            --surface2:  #13131f;
+            --border:    rgba(255,255,255,0.06);
+            --border-hi: rgba(99,102,241,0.35);
+            --text:      #e2e4f0;
+            --text-dim:  #6b6f8a;
+            --primary:   #6366f1;
+            --primary-glow: rgba(99,102,241,0.18);
+            --cyan:      #22d3ee;
+            --cyan-glow: rgba(34,211,238,0.15);
+            --success:   #10b981;
+            --success-glow: rgba(16,185,129,0.15);
+            --danger:    #f43f5e;
+            --danger-glow: rgba(244,63,94,0.15);
+            --warning:   #f59e0b;
         }
-        body { font-family: 'Inter', sans-serif; background: radial-gradient(circle at top, #1e1e2e 0%, #11111b 100%); color: var(--text); padding: 20px; display: flex; justify-content: center; margin: 0; min-height: 100vh; }
-        .container { max-width: 700px; width: 100%; display: flex; flex-direction: column; gap: 24px; margin-top: 20px; }
-        .card { background: var(--surface); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); padding: 32px; border-radius: 20px; box-shadow: 0 10px 40px rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.05); }
-        
-        h2 { margin-top: 0; margin-bottom: 24px; font-size: 28px; font-weight: 700; letter-spacing: -0.5px; background: linear-gradient(90deg, #cdd6f4, #a6adc8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 16px; }
-        h3 { margin-top: 0; margin-bottom: 20px; color: var(--text); border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 12px; font-weight: 600; }
-        
-        .stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; text-align: center; margin-bottom: 32px; }
-        .stat-box { background: var(--surface2); padding: 24px 16px; border-radius: 16px; display: flex; flex-direction: column; justify-content: center; align-items: center; border: 1px solid rgba(255,255,255,0.03); transition: all 0.3s ease; }
-        .stat-box:hover { transform: translateY(-4px); background: rgba(49, 50, 68, 0.6); border-color: rgba(255,255,255,0.08); box-shadow: 0 8px 20px rgba(0,0,0,0.2); }
-        .stat-value { font-size: 28px; font-weight: 700; color: var(--primary); margin-bottom: 8px; text-shadow: 0 2px 10px rgba(137, 180, 250, 0.2); }
-        .stat-label { font-size: 12px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; }
-        
-        .switch-container { display: flex; justify-content: space-between; align-items: center; padding: 16px 0; border-bottom: 1px solid rgba(255,255,255,0.03); }
-        .switch-container:last-child { border-bottom: none; }
-        .switch-label { font-weight: 500; color: var(--text); }
-        
-        .switch { position: relative; display: inline-block; width: 44px; height: 24px; }
-        .switch input { opacity: 0; width: 0; height: 0; }
-        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(255,255,255,0.1); transition: .3s; border-radius: 24px; border: 1px solid rgba(255,255,255,0.05); }
-        .slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 2px; bottom: 2px; background-color: white; transition: .3s cubic-bezier(0.4, 0.0, 0.2, 1); border-radius: 50%; box-shadow: 0 2px 5px rgba(0,0,0,0.2); }
-        input:checked + .slider { background-color: var(--success); border-color: var(--success); }
-        input:checked + .slider:before { transform: translateX(20px); }
-        
-        .status-badge { display: inline-block; padding: 8px 16px; border-radius: 30px; font-size: 12px; font-weight: 700; background: rgba(88, 91, 112, 0.2); color: var(--text-dim); border: 1px solid rgba(88, 91, 112, 0.2); margin-bottom: 16px; text-transform: uppercase; letter-spacing: 1px; transition: all 0.3s ease; }
-        .status-paused { background: rgba(249, 226, 175, 0.1); color: var(--warning); border-color: rgba(249, 226, 175, 0.2); }
-        .status-running { background: rgba(137, 180, 250, 0.1); color: var(--primary); border-color: rgba(137, 180, 250, 0.2); }
-        .status-error { background: rgba(243, 139, 168, 0.1); color: var(--danger); border-color: rgba(243, 139, 168, 0.2); }
-        
-        .action-btn { width: 100%; padding: 18px; font-size: 16px; font-weight: 700; border-radius: 14px; transition: all 0.2s cubic-bezier(0.4, 0.0, 0.2, 1); border: none; cursor: pointer; text-transform: uppercase; letter-spacing: 1px; }
-        .btn-start { background: linear-gradient(135deg, var(--success) 0%, #8bda85 100%); color: #082a06; box-shadow: 0 4px 15px rgba(166, 227, 161, 0.2); }
-        .btn-start:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(166, 227, 161, 0.3); }
-        .btn-stop { background: linear-gradient(135deg, var(--danger) 0%, #e86b8e 100%); color: #3a0b16; box-shadow: 0 4px 15px rgba(243, 139, 168, 0.2); }
-        .btn-stop:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(243, 139, 168, 0.3); }
+ 
+        *, *::before, *::after { box-sizing: border-box; }
+ 
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            margin: 0;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            padding: 16px 12px 56px;
+            background-image:
+                linear-gradient(rgba(99,102,241,0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(99,102,241,0.03) 1px, transparent 1px);
+            background-size: 40px 40px;
+        }
+ 
+        .container {
+            max-width: 640px;
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+ 
+        /* ── Header bar ── */
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 14px 16px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            flex-wrap: wrap;
+        }
+        .header-left { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+        .header-icon {
+            width: 34px; height: 34px;
+            background: var(--primary-glow);
+            border: 1px solid var(--border-hi);
+            border-radius: 10px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 17px;
+            flex-shrink: 0;
+        }
+        .header-title {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 17px;
+            font-weight: 700;
+            color: var(--text);
+            letter-spacing: -0.3px;
+        }
+        .header-sub {
+            font-size: 10px;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 1.2px;
+            margin-top: 1px;
+        }
+        .header-badges {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+ 
+        /* ── Pulse dot + status badge ── */
+        .pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 12px;
+            border-radius: 999px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            border: 1px solid var(--border);
+            color: var(--text-dim);
+            background: var(--surface2);
+            transition: all 0.3s ease;
+        }
+        .pill.running  { color: var(--primary);  background: var(--primary-glow);  border-color: var(--border-hi); }
+        .pill.paused   { color: var(--warning);   background: rgba(245,158,11,0.1);  border-color: rgba(245,158,11,0.25); }
+        .pill.error    { color: var(--danger);    background: var(--danger-glow);    border-color: rgba(244,63,94,0.3); }
+        .pill.game-ok  { color: var(--success);   background: var(--success-glow);   border-color: rgba(16,185,129,0.3); }
+ 
+        .pulse-dot {
+            width: 7px; height: 7px;
+            border-radius: 50%;
+            background: currentColor;
+            flex-shrink: 0;
+        }
+        .pill.running .pulse-dot {
+            animation: pulse 1.4s ease-in-out infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(99,102,241,0.5); }
+            50%       { opacity: 0.6; box-shadow: 0 0 0 5px rgba(99,102,241,0); }
+        }
+ 
+        /* ── Stats grid ── */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+        }
+        .stat-box {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 14px 12px;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 5px;
+            transition: border-color 0.2s, background 0.2s;
+            min-width: 0;
+        }
+        .stat-box:hover {
+            border-color: rgba(255,255,255,0.1);
+            background: var(--surface2);
+        }
+        .stat-label {
+            font-size: 9px;
+            font-weight: 600;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 100%;
+        }
+        .stat-value {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 22px;
+            font-weight: 700;
+            color: var(--text);
+            line-height: 1;
+            font-variant-numeric: tabular-nums;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 100%;
+        }
+        .stat-value.accent-cyan    { color: var(--cyan); }
+        .stat-value.accent-green   { color: var(--success); }
+        .stat-value.accent-primary { color: var(--primary); }
+        .stat-value.time-val       { font-size: 15px; color: var(--text); }
+ 
+        /* ── Mobile responsive ── */
+        @media (max-width: 480px) {
+            body { padding: 12px 10px 48px; }
+            .container { gap: 8px; }
+            .header { padding: 12px 14px; border-radius: 14px; }
+            .header-badges { width: 100%; }
+            .pill { font-size: 10px; padding: 4px 10px; }
+            .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+            /* Time Running spans full width on 2-col layout */
+            .stats-grid .stat-box:first-child { grid-column: span 2; }
+            /* Win Rate spans full width */
+            .stats-grid .stat-box:last-child { grid-column: span 2; }
+            .stat-value { font-size: 20px; }
+            .stat-value.time-val { font-size: 16px; }
+            .card { padding: 16px; border-radius: 14px; }
+            .action-btn { padding: 15px; }
+            .settings-row { padding: 12px 0; }
+        }
+ 
+        /* ── Main action card ── */
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 24px;
+        }
+        .card-label {
+            font-size: 10px;
+            font-weight: 600;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 1.2px;
+            margin-bottom: 16px;
+        }
+ 
+        /* ── Action button ── */
+        .action-btn {
+            width: 100%;
+            padding: 16px;
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 14px;
+            font-weight: 700;
+            border-radius: 12px;
+            border: none;
+            cursor: pointer;
+            letter-spacing: 0.5px;
+            transition: all 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+            text-transform: uppercase;
+        }
+        .btn-start {
+            background: var(--success);
+            color: #052e16;
+            box-shadow: 0 0 0 0 var(--success-glow);
+        }
+        .btn-start:hover {
+            background: #0fca8e;
+            box-shadow: 0 4px 20px rgba(16,185,129,0.35);
+            transform: translateY(-1px);
+        }
+        .btn-stop {
+            background: var(--danger);
+            color: #1a0009;
+            box-shadow: 0 0 0 0 var(--danger-glow);
+        }
+        .btn-stop:hover {
+            background: #f5607a;
+            box-shadow: 0 4px 20px rgba(244,63,94,0.35);
+            transform: translateY(-1px);
+        }
         .action-btn:active { transform: translateY(1px); box-shadow: none; }
-        
-        select { appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23cdd6f4' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 12px center; background-size: 16px; padding-right: 40px !important; }
-        .custom-select-btn { padding: 10px 24px; background: rgba(137, 180, 250, 0.1); color: var(--primary); border: 1px solid rgba(137, 180, 250, 0.2); border-radius: 8px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
-        .custom-select-btn:hover { background: rgba(137, 180, 250, 0.2); transform: translateY(-1px); }
+ 
+        /* ── Settings ── */
+        .settings-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 14px 0;
+            border-bottom: 1px solid var(--border);
+        }
+        .settings-row:last-child { border-bottom: none; padding-bottom: 0; }
+        .settings-row:first-of-type { padding-top: 0; }
+        .row-label { font-size: 13px; font-weight: 500; color: var(--text); }
+        .row-hint  { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+ 
+        /* Toggle switch */
+        .switch { position: relative; display: inline-block; width: 42px; height: 23px; flex-shrink: 0; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider {
+            position: absolute; inset: 0;
+            background: rgba(255,255,255,0.08);
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            cursor: pointer;
+            transition: 0.25s;
+        }
+        .slider::before {
+            content: "";
+            position: absolute;
+            width: 17px; height: 17px;
+            left: 2px; bottom: 2px;
+            background: #fff;
+            border-radius: 50%;
+            transition: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+        }
+        input:checked + .slider { background: var(--success); border-color: var(--success); }
+        input:checked + .slider::before { transform: translateX(19px); }
+ 
+        /* IP select row */
+        .ip-row { flex-direction: column; align-items: flex-start; gap: 10px; }
+        .ip-controls { display: flex; width: 100%; gap: 8px; }
+        select {
+            flex-grow: 1;
+            padding: 9px 36px 9px 12px;
+            background: var(--surface2);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            font-family: 'Inter', sans-serif;
+            font-size: 13px;
+            font-weight: 500;
+            outline: none;
+            appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236b6f8a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 10px center;
+            cursor: pointer;
+            transition: border-color 0.2s;
+        }
+        select:focus { border-color: var(--border-hi); }
+        .save-btn {
+            padding: 9px 18px;
+            background: var(--primary-glow);
+            color: #a5b4fc;
+            border: 1px solid var(--border-hi);
+            border-radius: 8px;
+            font-family: 'Inter', sans-serif;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+        .save-btn:hover { background: rgba(99,102,241,0.28); color: #c7d2fe; }
+ 
+        /* ── Divider ── */
+        .divider {
+            height: 1px;
+            background: var(--border);
+            margin: 4px 0;
+        }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="card">
-            <h2>GTAO HorseBet</h2>
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-                <div id="status-badge" class="status-badge">Loading...</div>
-                <div id="game-running-badge" class="status-badge">Game: Checking...</div>
+<div class="container">
+ 
+    <!-- Header -->
+    <div class="header">
+        <div class="header-left">
+            <div class="header-icon">🏇</div>
+            <div>
+                <div class="header-title">HorseBet</div>
+                <div class="header-sub">GTAO Automation</div>
             </div>
-            
-            <div class="stats-grid">
-                <div class="stat-box">
-                    <div id="time_running" class="stat-value" style="font-size: 22px; color: var(--text);">0h 0m 0s</div>
-                    <div class="stat-label">Time Running</div>
-                </div>
-                <div class="stat-box">
-                    <div id="money_per_hour" class="stat-value">0</div>
-                    <div class="stat-label">Earned / Hour</div>
-                </div>
-                <div class="stat-box">
-                    <div id="winnings" class="stat-value">0</div>
-                    <div class="stat-label">Earned All Time</div>
-                </div>
-                <div class="stat-box" style="grid-column: span 1;">
-                    <div id="races_won" class="stat-value" style="color: var(--success); text-shadow: 0 2px 10px rgba(166, 227, 161, 0.2);">0</div>
-                    <div class="stat-label">Wins</div>
-                </div>
-                <div class="stat-box" style="grid-column: span 2;">
-                    <div id="win_prob" class="stat-value">0%</div>
-                    <div class="stat-label">Win Probability</div>
-                </div>
-            </div>
-
-            <button id="start-btn" class="action-btn btn-start" onclick="toggleBot()">Start Automation</button>
         </div>
-        
-        <div class="card">
-            <h3>Settings</h3>
-            <div class="switch-container">
-                <span class="switch-label">Web Hosting (LAN Access)</span>
-                <label class="switch">
-                    <input type="checkbox" id="toggle-web" onchange="toggleSetting('web_hosting', this.checked)">
-                    <span class="slider"></span>
-                </label>
+        <div class="header-badges">
+            <div id="status-badge" class="pill">
+                <span class="pulse-dot"></span>
+                <span id="status-text">Loading</span>
             </div>
-            <div class="switch-container" style="flex-direction: column; align-items: flex-start;">
-                <span class="switch-label" style="margin-bottom: 12px;">Webserver Address</span>
-                <div style="display: flex; width: 100%; gap: 10px;">
-                    <select id="host-ip-select" style="flex-grow: 1; padding: 10px 14px; border-radius: 8px; background: rgba(0,0,0,0.2); color: var(--text); border: 1px solid rgba(255,255,255,0.1); font-family: 'Inter', sans-serif; font-weight: 500; font-size: 14px; outline: none;">
-                    </select>
-                    <button onclick="changeHostIp()" class="custom-select-btn">Save</button>
-                </div>
-            </div>
-            <div class="switch-container">
-                <span class="switch-label">Debug Mode (Save Images)</span>
-                <label class="switch">
-                    <input type="checkbox" id="toggle-debug" onchange="toggleSetting('debug', this.checked)">
-                    <span class="slider"></span>
-                </label>
+            <div id="game-running-badge" class="pill">
+                <span class="pulse-dot"></span>
+                <span id="game-text">Game</span>
             </div>
         </div>
     </div>
-
+ 
+    <!-- Stats -->
+    <div class="stats-grid">
+        <div class="stat-box">
+            <div class="stat-label">Time Running</div>
+            <div id="time_running" class="stat-value time-val">0h 0m 0s</div>
+        </div>
+        <div class="stat-box">
+            <div class="stat-label">Earned / hr</div>
+            <div id="money_per_hour" class="stat-value accent-cyan">$0</div>
+        </div>
+        <div class="stat-box">
+            <div class="stat-label">All-Time</div>
+            <div id="winnings" class="stat-value accent-cyan">$0</div>
+        </div>
+        <div class="stat-box">
+            <div class="stat-label">Wins</div>
+            <div id="races_won" class="stat-value accent-green">0</div>
+        </div>
+        <div class="stat-box" style="grid-column: span 2;">
+            <div class="stat-label">Win Rate</div>
+            <div id="win_prob" class="stat-value accent-primary">0%</div>
+        </div>
+    </div>
+ 
+    <!-- Main control -->
+    <div class="card">
+        <div class="card-label">Automation</div>
+        <button id="start-btn" class="action-btn btn-start" onclick="toggleBot()">Start Automation</button>
+    </div>
+ 
+    <!-- Settings -->
+    <div class="card">
+        <div class="card-label">Settings</div>
+ 
+        <div class="settings-row">
+            <div>
+                <div class="row-label">LAN Access</div>
+                <div class="row-hint">Allow connections from local network</div>
+            </div>
+            <label class="switch">
+                <input type="checkbox" id="toggle-web" onchange="toggleSetting('web_hosting', this.checked)">
+                <span class="slider"></span>
+            </label>
+        </div>
+ 
+        <div class="settings-row ip-row">
+            <div>
+                <div class="row-label">Server Address</div>
+                <div class="row-hint">IP interface to bind the webserver · port <strong style="color:var(--text);font-weight:600;">8027</strong></div>
+            </div>
+            <div class="ip-controls">
+                <select id="host-ip-select"></select>
+                <button onclick="changeHostIp()" class="save-btn">Save</button>
+            </div>
+        </div>
+ 
+        <div class="settings-row">
+            <div>
+                <div class="row-label">Debug Mode</div>
+                <div class="row-hint">Save screenshots during automation</div>
+            </div>
+            <label class="switch">
+                <input type="checkbox" id="toggle-debug" onchange="toggleSetting('debug', this.checked)">
+                <span class="slider"></span>
+            </label>
+        </div>
+    </div>
+ 
+</div>
+ 
     <script>
         let isUpdating = false;
-
+ 
         async function fetchStats() {
             if(isUpdating) return;
             try {
@@ -136,26 +440,26 @@ HTML_TEMPLATE = """
                 const data = await res.json();
                 
                 const statusBadge = document.getElementById('status-badge');
-                statusBadge.innerText = data.status;
-                statusBadge.className = 'status-badge';
-                if (data.status.toLowerCase().includes('failed') || data.status.toLowerCase().includes('error') || data.status.toLowerCase().includes('stopped')) statusBadge.classList.add('status-error');
-                else if (data.status.toLowerCase().includes('paused') || !data.running) statusBadge.classList.add('status-paused');
-                else statusBadge.classList.add('status-running');
-
+                document.getElementById('status-text').innerText = data.status;
+                statusBadge.className = 'pill';
+                if (data.status.toLowerCase().includes('failed') || data.status.toLowerCase().includes('error') || data.status.toLowerCase().includes('stopped')) statusBadge.classList.add('error');
+                else if (data.status.toLowerCase().includes('paused') || !data.running) statusBadge.classList.add('paused');
+                else statusBadge.classList.add('running');
+ 
                 const gameBadge = document.getElementById('game-running-badge');
-                gameBadge.innerText = data.game_running ? "Game: Running" : "Game: Not Found";
-                gameBadge.style.color = data.game_running ? "var(--success)" : "var(--danger)";
-
+                document.getElementById('game-text').innerText = data.game_running ? "Game: On" : "Game: Off";
+                gameBadge.className = 'pill' + (data.game_running ? ' game-ok' : ' error');
+ 
                 const hrs = Math.floor(data.elapsed / 3600);
                 const mins = Math.floor((data.elapsed % 3600) / 60);
                 const secs = data.elapsed % 60;
                 document.getElementById('time_running').innerText = `${hrs}h ${mins}m ${secs}s`;
-
-                document.getElementById('winnings').innerText = data.winnings;
+ 
+                document.getElementById('winnings').innerText = '$' + data.winnings.toLocaleString();
                 
                 const hours = data.elapsed / 3600;
-                document.getElementById('money_per_hour').innerText = hours > 0 ? Math.round(data.winnings / hours) : 0;
-
+                document.getElementById('money_per_hour').innerText = '$' + (hours > 0 ? Math.round(data.winnings / hours).toLocaleString() : 0);
+ 
                 document.getElementById('races_won').innerText = data.races_won;
                 
                 const total_races = data.races_won + data.races_lost;
@@ -164,10 +468,10 @@ HTML_TEMPLATE = """
                 const startBtn = document.getElementById('start-btn');
                 startBtn.innerText = data.running ? "Stop Automation" : "Start Automation";
                 startBtn.className = data.running ? "action-btn btn-stop" : "action-btn btn-start";
-
+ 
                 document.getElementById('toggle-debug').checked = data.debug;
                 document.getElementById('toggle-web').checked = data.web_hosting;
-
+ 
                 const select = document.getElementById('host-ip-select');
                 if (select.children.length === 0) {
                     data.available_ips.forEach(ip => {
@@ -184,7 +488,7 @@ HTML_TEMPLATE = """
                 statusBadge.className = 'status-badge status-error';
             }
         }
-
+ 
         async function toggleBot() {
             isUpdating = true;
             const res = await fetch('/api/stats');
@@ -193,13 +497,13 @@ HTML_TEMPLATE = """
             await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
             setTimeout(() => { isUpdating = false; fetchStats(); }, 200);
         }
-
+ 
         async function changeHostIp() {
             const ip = document.getElementById('host-ip-select').value;
             toggleSetting('host_ip', ip);
             alert("Webserver address updated to " + ip + ".");
         }
-
+ 
         async function toggleSetting(key, value) {
             isUpdating = true;
             const payload = {};
@@ -207,7 +511,7 @@ HTML_TEMPLATE = """
             await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
             setTimeout(() => { isUpdating = false; fetchStats(); }, 200);
         }
-
+ 
         setInterval(fetchStats, 1000);
         window.onload = fetchStats;
     </script>
@@ -263,17 +567,18 @@ def start_dashboard(bot_state, host_ip='0.0.0.0'):
     def run_flask_app():
         autobet_dir = os.path.join(os.path.expanduser('~'), 'Documents', 'autobet')
         ssl_dir = os.path.join(autobet_dir, 'ssl')
-        key_path = os.path.join(ssl_dir, 'key.pem')
-        cert_pem_path = os.path.join(ssl_dir, 'cert.pem')
-        cert_crt_path = os.path.join(ssl_dir, 'cert.crt')
-
+        
         cert_path = None
-        if os.path.exists(cert_pem_path):
-            cert_path = cert_pem_path
-        elif os.path.exists(cert_crt_path):
-            cert_path = cert_crt_path
+        key_path = None
+        
+        if os.path.exists(ssl_dir):
+            for f in os.listdir(ssl_dir):
+                if f.endswith('.key') or (f.endswith('.pem') and 'key' in f.lower()):
+                    key_path = os.path.join(ssl_dir, f)
+                elif f.endswith(('.crt', '.cer')) or (f.endswith('.pem') and 'key' not in f.lower()):
+                    cert_path = os.path.join(ssl_dir, f)
 
-        if cert_path and os.path.exists(key_path):
+        if cert_path and key_path:
             print(f"\n[SSL INFO] Found certificates in {ssl_dir}. Starting with HTTPS.")
             ssl_context = (cert_path, key_path)
             app.run(host=host_ip, port=8027, debug=False, use_reloader=False, ssl_context=ssl_context)
