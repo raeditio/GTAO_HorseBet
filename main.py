@@ -385,12 +385,24 @@ def main_loop():
             continue
 
         if not was_running:
-            if hwnd and win32gui.GetForegroundWindow() == hwnd:
-                print("Starting immediately...")
-            else:
-                bot_state.status = "Starting in 5s... Switch to GTA!"
-                print("Starting in 5 seconds... Switch to GTA V!")
-                time.sleep(5)
+            if hwnd:
+                if win32gui.GetForegroundWindow() != hwnd:
+                    print("Bringing GTA V to the foreground...")
+                    bot_state.status = "Switching to GTA V..."
+                    try:
+                        # 9 = SW_RESTORE (Restores the window if it is minimized)
+                        win32gui.ShowWindow(hwnd, 9)
+                        # Bring the window to the absolute front
+                        win32gui.SetForegroundWindow(hwnd)
+                        # Give Windows a moment to complete the animation
+                        time.sleep(1.5) 
+                    except Exception as e:
+                        print(f"Windows prevented auto-focus ({e}). Falling back to manual delay.")
+                        bot_state.status = "Starting in 5s... Switch to GTA!"
+                        print("Starting in 5 seconds... Switch to GTA V!")
+                        time.sleep(5)
+                else:
+                    print("Starting immediately...")
             was_running = True
         
         if not hwnd or win32gui.GetForegroundWindow() != hwnd:
