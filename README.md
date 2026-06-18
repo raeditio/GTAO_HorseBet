@@ -7,7 +7,7 @@ This script detects the `GTA_Enhanced.exe` window and automates the betting proc
 
 1. Start GTA V and enter GTA Online.
 2. Go to the Diamond Casino and sit at an "Inside Track" betting terminal.
-3. Enter the Place Bet screen.
+3. Enter betting terminal focus by left clicking.
 4. Run the script.
 
 ## Disclaimer

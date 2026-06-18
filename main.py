@@ -410,6 +410,16 @@ def main_loop():
             
             time.sleep(1)
             continue
+        
+        mult_w = win_w / 1024.0
+        mult_h = win_h / 768.0
+        
+        # Click "Place Bet Again" button (Converted to 1024x768 baseline)
+        button3_x = win_x + win_w * 3 // 4
+        button3_y = win_y + int(605 * mult_h)
+        pydirectinput.moveTo(int(button3_x), int(button3_y))
+        pydirectinput.mouseDown()
+        pydirectinput.mouseUp()
 
         bot_state.status = "Reading Odds"
         print(f"\nTaking screenshot of game window... ({win_w}x{win_h})")
@@ -417,8 +427,6 @@ def main_loop():
         frame = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
 
         # --- Read Total Chips ---
-        mult_w = win_w / 1024.0
-        mult_h = win_h / 768.0
         chip_x, chip_y = int(880 * mult_w), int(10 * mult_h)
         chip_w, chip_h = int(180 * mult_w), int(30 * mult_h)
         chip_crop = frame[chip_y:chip_y+chip_h, chip_x:chip_x+chip_w]
@@ -617,15 +625,10 @@ def main_loop():
                     was_running = False
                     continue
                 
-                # Click "Place Bet" button (Converted to 1024x768 baseline)
+                # Click "Bet Again" button (Converted to 1024x768 baseline)
                 button2_x = win_x + win_w // 2
                 button2_y = win_y + int(705 * mult_h)
                 pydirectinput.moveTo(int(button2_x), int(button2_y))
-                pydirectinput.mouseDown()
-                pydirectinput.mouseUp()
-                button3_x = win_x + win_w * 3 // 4
-                button3_y = win_y + int(605 * mult_h)
-                pydirectinput.moveTo(int(button3_x), int(button3_y))
                 pydirectinput.mouseDown()
                 pydirectinput.mouseUp()
                 
