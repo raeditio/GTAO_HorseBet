@@ -171,16 +171,9 @@ def parse_odds(pred_str):
     """Translates the OCR string prediction into a mathematical odds numerator."""
     pred = pred_str.strip().lower()
     
-    # Common OCR mistakes compensation
-    pred = pred.replace('\\', '/').replace('|', '/').replace('l', '/').replace('i', '/')
-    
-    # A valid GTA odd never starts with a 0. If it does, it was misread and is almost certainly an 8.
-    if pred.startswith('0'):
-        pred = '8' + pred[1:]
-    
     if not pred: return -1
     
-    # Fuzzy match for 'evens' in case of a minor 1-letter OCR mistake
+    # Fuzzy match for 'evens' in case of a minor 1-letter drop
     if "even" in pred or "evn" in pred or "eve" in pred: 
         return 1
         
@@ -194,24 +187,16 @@ def parse_odds(pred_str):
 
 def parse_winnings(pred_str):
     """Translates the OCR string prediction into a winnings integer."""
-    pred = pred_str.strip().lower()
-    
-    # Common OCR mistakes compensation for numbers
-    pred = pred.replace('o', '0').replace('l', '1').replace('i', '1').replace('s', '5')
-    
     # Extract only digits (removes slashes, spaces, commas, letters, etc)
-    digits = ''.join(filter(str.isdigit, pred))
+    digits = ''.join(filter(str.isdigit, pred_str))
     if digits:
         return int(digits)
     return -1
 
 def parse_chips(pred_str):
     """Translates the OCR string prediction into a total chips integer."""
-    # Common OCR mistakes compensation for numbers
-    pred = pred_str.replace('o', '0').replace('l', '1').replace('i', '1').replace('s', '5').replace('b', '8').replace('z', '2')
-    
     # Extract only digits (removes slashes, spaces, commas, letters, etc)
-    digits = ''.join(filter(str.isdigit, pred))
+    digits = ''.join(filter(str.isdigit, pred_str))
     if digits:
         return int(digits)
     return -1
@@ -673,7 +658,7 @@ def main_loop():
                     
                 consecutive_read_failures = 0
                 
-            time.sleep(2)
+            # time.sleep(2)
 
         # time.sleep(1)
 
