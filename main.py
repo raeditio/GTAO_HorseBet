@@ -167,64 +167,6 @@ if bot_state.debug:
         try: os.remove(os.path.join(DEBUG_DIR, f))
         except: pass
 
-def load_knn_model():
-    """Loads and verifies the KNN model handling both native and manual YAML formats."""
-    filepath = os.path.join(get_resource_path(), 'resources', 'data', 'model.yml')
-    
-    if not os.path.exists(filepath):
-        print(f"Error: Model file not found at '{filepath}'")
-        return None
-        
-    # METHOD 1: Try OpenCV's native ML loader
-    try:
-        model = cv2.ml.KNearest_load(filepath)
-        if model is not None and model.isTrained():
-            print("Model loaded successfully via cv2.ml.KNearest_load().")
-            return model
-    except Exception:
-        pass 
-
-    # METHOD 2: Try manual parsing
-    try:
-        print("Native ML load failed/unsupported. Attempting manual matrix extraction...")
-        fs = cv2.FileStorage(filepath, cv2.FILE_STORAGE_READ)
-        if not fs.isOpened():
-            print("Trying in-memory load for potential path encoding issues...")
-            with open(filepath, 'r', encoding='utf-8') as f:
-                yaml_data = f.read()
-            fs = cv2.FileStorage(yaml_data, cv2.FILE_STORAGE_READ | cv2.FILE_STORAGE_MEMORY)
-            
-        if not fs.isOpened():
-            print("Error: Could not open model.yml for manual parsing.")
-            return None
-
-        root_knn = fs.getNode('opencv_ml_knn')
-        parent_node = root_knn if not root_knn.empty() else fs
-
-        def extract_matrix(keys):
-            for key in keys:
-                node = parent_node.getNode(key)
-                if not node.empty():
-                    return node.mat()
-            return None
-
-        samples = extract_matrix(['samples', 'train_data', 'trainData', 'data'])
-        responses = extract_matrix(['responses', 'train_labels', 'labels', 'responsesData'])
-        fs.release()
-
-        if samples is None or responses is None:
-            print("Error: Model file is missing recognizable matrices.")
-            return None
-
-        model = cv2.ml.KNearest_create()
-        model.train(np.float32(samples), cv2.ml.ROW_SAMPLE, np.float32(responses))
-        print("Model verified and loaded successfully via manual matrix extraction.")
-        return model
-
-    except Exception as e:
-        print(f"Failed to load model manually: {e}")
-        return None
-
 def parse_odds(pred_str):
     """Translates the OCR string prediction into a mathematical odds numerator."""
     pred = pred_str.strip().lower()
@@ -261,11 +203,60 @@ def parse_winnings(pred_str):
     digits = ''.join(filter(str.isdigit, pred))
     if digits:
         return int(digits)
-        val = int(digits)
-        if val > 300000:
-            return -1
-        return val
     return -1
+
+def parse_chips(pred_str):
+    """Translates the OCR string prediction into a total chips integer."""
+    # Common OCR mistakes compensation for numbers
+    pred = pred_str.replace('o', '0').replace('l', '1').replace('i', '1').replace('s', '5').replace('b', '8').replace('z', '2')
+    
+    # Extract only digits (removes slashes, spaces, commas, letters, etc)
+    digits = ''.join(filter(str.isdigit, pred))
+    if digits:
+        return int(digits)
+    return -1
+
+def load_svm_model():
+    """Loads and verifies the SVM model."""
+    filepath = os.path.join(get_resource_path(), 'resources', 'data', 'svm_model.yml')
+    
+    if not os.path.exists(filepath):
+        print(f"Error: Model file not found at '{filepath}'")
+        return None
+        
+    try:
+        model = cv2.ml.SVM_load(filepath)
+        if model is not None and model.isTrained():
+            print("Model loaded successfully via cv2.ml.SVM_load().")
+            return model
+        else:
+            print("Error: Model loaded but reports as untrained.")
+            return None
+    except Exception as e:
+        print(f"Failed to load SVM model: {e}")
+        return None
+
+def resize_and_pad(img, size=(20, 20)):
+    """
+    Resizes the character while preserving its aspect ratio, 
+    then pads the remaining space with black pixels to perfectly fit the target size.
+    """
+    h, w = img.shape
+    scale = min(size[0] / w, size[1] / h)
+    new_w, new_h = max(1, int(w * scale)), max(1, int(h * scale))
+    
+    # Resize preserving aspect ratio
+    resized = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    
+    # Calculate padding to center the character
+    top = (size[1] - new_h) // 2
+    bottom = size[1] - new_h - top
+    left = (size[0] - new_w) // 2
+    right = size[0] - new_w - left
+    
+    # Add black borders
+    padded = cv2.copyMakeBorder(resized, top, bottom, left, right, cv2.BORDER_CONSTANT, value=0)
+    return padded
 
 def read_ocr_string(model, img, debug_prefix):
     """Reads the raw text from an image by parsing individual upscaled character contours."""
@@ -296,25 +287,36 @@ def read_ocr_string(model, img, debug_prefix):
     # Because we upscaled the image, the minimum contour area (noise filter) needs to scale accordingly
     min_contour_area = 5 * (upscale_factor * upscale_factor)
     
+    # Determine the maximum height among valid contours to filter out small fragments (like chip icons)
+    max_h = 0
+    for c in contours:
+        x, y, w, h = cv2.boundingRect(c)
+        if w * h >= min_contour_area and h > max_h:
+            max_h = h
+            
     for c in contours:
         x, y, w, h = cv2.boundingRect(c)
         if w * h < min_contour_area:  
+            continue
+            
+        # Filter out short fragments (less than half the height of the tallest character)
+        if h < max_h * 0.5:
             continue
             
         # Crop the White-on-Black character
         roi = thresh[y:y+h, x:x+w]
         
         # 3. INVERT the character to Black-on-White!
-        # The KNN model was trained on Black text on a White background.
+        # The SVM model was trained on Black text on a White background.
         roi_inverted = cv2.bitwise_not(roi)
         
-        # Resize to 10x10 to match the 100 columns expected by model.yml (THIS MUST STAY 10x10)
-        resized = cv2.resize(roi_inverted, (10, 10))
-        sample = resized.reshape((1, -1)).astype(np.float32)
+        # Use our new padding function with 20x20
+        roismall = resize_and_pad(roi_inverted, size=(20, 20))
+        sample = roismall.reshape((1, 400)).astype(np.float32)
         
-        # Predict
-        ret, results, neighbours, dist = model.findNearest(sample, k=1)
-        pred_val = int(results[0][0])
+        # Predict using SVM
+        _, result = model.predict(sample)
+        pred_val = int(result[0][0])
         pred_char = chr(pred_val) if 0 <= pred_val <= 255 else str(pred_val)
         
         detected_chars.append((x, pred_char))
@@ -371,11 +373,11 @@ def main_loop():
     # Yield execution briefly to ensure the dashboard UI opens first
     time.sleep(1.5)
     
-    model = load_knn_model()
+    model = load_svm_model()
     
     if model is None:
         print("Exiting due to model load failure.")
-        filepath = os.path.join(get_resource_path(), 'resources', 'data', 'model.yml')
+        filepath = os.path.join(get_resource_path(), 'resources', 'data', 'svm_model.yml')
         if not os.path.exists(filepath):
             bot_state.status = "Model file not found"
         else:
@@ -423,8 +425,8 @@ def main_loop():
         # --- Read Total Chips ---
         mult_w = win_w / 1024.0
         mult_h = win_h / 768.0
-        chip_x, chip_y = int(800 * mult_w), int(20 * mult_h)
-        chip_w, chip_h = int(200 * mult_w), int(50 * mult_h)
+        chip_x, chip_y = int(880 * mult_w), int(10 * mult_h)
+        chip_w, chip_h = int(180 * mult_w), int(30 * mult_h)
         chip_crop = frame[chip_y:chip_y+chip_h, chip_x:chip_x+chip_w]
         chip_str = read_ocr_string(model, chip_crop, "chips")
         parsed_chips = parse_chips(chip_str)
@@ -490,7 +492,11 @@ def main_loop():
                 pydirectinput.mouseDown()
                 pydirectinput.mouseUp()
                 
-                print("Bet placed. Waiting for race to finish (~34s)...")
+                # Deduct 10,000 max bet immediately from chips tracker
+                bot_state.stats.total_chips -= 10000
+                print(f"Bet placed. Deducted 10,000 chips. Total Chips: {bot_state.stats.total_chips}")
+                
+                print("Waiting for race to finish (~34s)...")
                 
                 interrupted = False
                 for i in range(34, 0, -1):
@@ -588,6 +594,11 @@ def main_loop():
                             print(f"Winnings prediction: {res} [Raw OCR: '{pred_str}']")
                             
                         bot_state.stats.winnings += (res - 10000)
+                        
+                        # Add winning payout to chips tracker
+                        bot_state.stats.total_chips += res
+                        print(f"Race Won! Added {res} chips. Total Chips: {bot_state.stats.total_chips}")
+                        
                         bot_state.stats.races_won += 1
                         winnings_detected = True
                         break

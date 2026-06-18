@@ -1,5 +1,6 @@
 import threading
 import os
+import logging
 from flask import Flask, jsonify, render_template_string, request, abort
 
 HTML_TEMPLATE = """
@@ -361,6 +362,8 @@ HTML_TEMPLATE = """
             overflow-y: auto;
             white-space: pre-wrap;
             word-wrap: break-word;
+            user-select: text;
+            -webkit-user-select: text;
         }
         .log-line { margin-bottom: 2px; line-height: 1.4; }
     </style>
@@ -623,6 +626,10 @@ HTML_TEMPLATE = """
 
 def start_dashboard(bot_state, host_ip='0.0.0.0', ssl_dir=None):
     app = Flask(__name__)
+
+    # Suppress Flask/Werkzeug HTTP request logs
+    log = logging.getLogger('werkzeug')
+    log.setLevel(logging.ERROR)
 
     @app.before_request
     def limit_remote_access():
