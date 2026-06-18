@@ -355,9 +355,6 @@ def get_dynamic_boxes(width, height):
 def main_loop():
     bot_state.status = "Loading Model..."
     
-    # Yield execution briefly to ensure the dashboard UI opens first
-    time.sleep(1.5)
-    
     model = load_svm_model()
     
     if model is None:
