@@ -1,11 +1,11 @@
 [Setup]
 AppName=AutoBet
-AppVersion=1.0
+AppVersion=1.0.1
 AppPublisher=raeditio
 DefaultDirName={commonpf}\AutoBet
 DefaultGroupName=AutoBet
 OutputDir=Output
-OutputBaseFilename=AutoBet v1.0
+OutputBaseFilename=AutoBet v1.0.1
 Compression=lzma2
 SolidCompression=yes
 ; Ensure you have built the app using PyInstaller before compiling this script

@@ -527,7 +527,7 @@ def main_loop():
                     else:
                         print(f"Winnings prediction: {res} [Raw OCR: '{pred_str}']")
                         
-                    bot_state.stats.winnings += res
+                    bot_state.stats.winnings += (res - 10000)
                     bot_state.stats.races_won += 1
                 else:
                     print(f"No winnings detected. Raw OCR: '{pred_str}'")
