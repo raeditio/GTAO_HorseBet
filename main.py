@@ -603,7 +603,7 @@ def main_loop():
                     #     winnings_img = pyautogui.screenshot(region=(win_x + x_coord, win_y + y_coord, w_coord, h_coord))
                     #     winnings_crop = cv2.cvtColor(np.array(winnings_img), cv2.COLOR_RGB2BGR)
                     # else:
-                        print(f"No winnings detected. Raw OCR: '{pred_str}'")
+                    print(f"No winnings detected. Raw OCR: '{pred_str}'")
 
                 if not winnings_detected:
                     bot_state.stats.winnings -= 10000
