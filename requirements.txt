@@ -6,3 +6,4 @@ Pillow
 pywin32
 pydirectinput
 Flask
+pywebview

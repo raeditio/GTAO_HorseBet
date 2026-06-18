@@ -10,13 +10,10 @@ import socket
 import webbrowser
 import sys
 import threading
+import io
+import base64
 from dashboard import start_dashboard
-
-try:
-    import webview
-    USE_WEBVIEW = True
-except ImportError:
-    USE_WEBVIEW = False
+import webview
 
 def get_resource_path():
     """Get the absolute path to bundled resources."""
@@ -65,6 +62,7 @@ class BettingStats:
         self.winnings = 0
         self.total_time_running = 0
         self.session_start_time = None
+        self.total_chips = 0
         
     def reset(self):
         self.races_won = 0
@@ -72,6 +70,7 @@ class BettingStats:
         self.winnings = 0
         self.total_time_running = 0
         self.session_start_time = None
+        self.total_chips = 0
         
     def start_session(self):
         if self.session_start_time is None:
@@ -105,14 +104,28 @@ def get_available_ips():
 class BotState:
     def __init__(self):
         self.running = False
-        self.status = "Waiting for start..."
+        self.status = "Initializing..."
         self.stats = BettingStats()
         self.debug = False
         self.web_hosting = True
         self.game_running = False
         self.host_ip = "0.0.0.0"
         self.available_ips = get_available_ips()
+        self.notifications = []
+        self.logs = []
         
+    def get_screenshot(self):
+        hwnd, win_x, win_y, win_w, win_h = get_gta_window_info()
+        if hwnd and win_w > 0 and win_h > 0:
+            try:
+                img = pyautogui.screenshot(region=(win_x, win_y, win_w, win_h))
+                buf = io.BytesIO()
+                img.save(buf, format='JPEG')
+                return base64.b64encode(buf.getvalue()).decode('utf-8')
+            except Exception as e:
+                print(f"Screenshot error: {e}")
+        return None
+
     def set_running(self, is_running):
         if is_running and not self.running:
             self.stats.reset()
@@ -123,6 +136,30 @@ class BotState:
 
 bot_state = BotState()
 bot_state.debug = args.debug
+
+class ConsoleLogger:
+    def __init__(self, state_obj):
+        self.terminal = sys.stdout
+        self.state = state_obj
+        self._log_buffer = ""
+        
+    def write(self, message):
+        self.terminal.write(message)
+        self._log_buffer += message
+        while '\n' in self._log_buffer:
+            line, self._log_buffer = self._log_buffer.split('\n', 1)
+            self.state.logs.append(line)
+            if len(self.state.logs) > 200:
+                self.state.logs.pop(0)
+                
+    def flush(self):
+        self.terminal.flush()
+        
+    def __getattr__(self, attr):
+        return getattr(self.terminal, attr)
+
+sys.stdout = ConsoleLogger(bot_state)
+sys.stderr = sys.stdout
 
 if bot_state.debug:
     # Empty directory
@@ -224,6 +261,10 @@ def parse_winnings(pred_str):
     digits = ''.join(filter(str.isdigit, pred))
     if digits:
         return int(digits)
+        val = int(digits)
+        if val > 300000:
+            return -1
+        return val
     return -1
 
 def read_ocr_string(model, img, debug_prefix):
@@ -325,6 +366,11 @@ def get_dynamic_boxes(width, height):
     return boxes
 
 def main_loop():
+    bot_state.status = "Loading Model..."
+    
+    # Yield execution briefly to ensure the dashboard UI opens first
+    time.sleep(1.5)
+    
     model = load_knn_model()
     
     if model is None:
@@ -338,6 +384,7 @@ def main_loop():
         
     consecutive_read_failures = 0
     was_running = False
+    bot_state.status = "Paused - Ready to Start"
 
     while True:
         hwnd, win_x, win_y, win_w, win_h = get_gta_window_info()
@@ -372,6 +419,17 @@ def main_loop():
         print(f"\nTaking screenshot of game window... ({win_w}x{win_h})")
         screenshot = pyautogui.screenshot(region=(win_x, win_y, win_w, win_h))
         frame = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
+
+        # --- Read Total Chips ---
+        mult_w = win_w / 1024.0
+        mult_h = win_h / 768.0
+        chip_x, chip_y = int(800 * mult_w), int(20 * mult_h)
+        chip_w, chip_h = int(200 * mult_w), int(50 * mult_h)
+        chip_crop = frame[chip_y:chip_y+chip_h, chip_x:chip_x+chip_w]
+        chip_str = read_ocr_string(model, chip_crop, "chips")
+        parsed_chips = parse_chips(chip_str)
+        if parsed_chips >= 0:
+            bot_state.stats.total_chips = parsed_chips
 
         dynamic_boxes = get_dynamic_boxes(win_w, win_h)
 
@@ -433,10 +491,10 @@ def main_loop():
                 pydirectinput.mouseUp()
                 
                 print("Bet placed. Waiting for race to finish (~34s)...")
-                bot_state.status = "Waiting for race to finish (~34s)"
                 
                 interrupted = False
-                for _ in range(34):
+                for i in range(34, 0, -1):
+                    bot_state.status = f"Waiting for race to finish (~{i}s)"
                     if not bot_state.running or win32gui.GetForegroundWindow() != hwnd:
                         bot_state.set_running(False)
                         bot_state.status = "Stopped (GTA lost focus)"
@@ -516,21 +574,33 @@ def main_loop():
                         time.sleep(2)
                 
                 # Reading and parsing winnings accurately
-                pred_str = read_ocr_string(model, winnings_crop, "winnings")
-                res = parse_winnings(pred_str)
-                
-                if res > 0 or '+' in pred_str:
-                    expected_winnings = 10000 * (odds_list[best_horse_idx] + 1)
-                    if res != expected_winnings:
-                        print(f"Winnings prediction misread as {res}. Overriding to expected math: {expected_winnings} [Raw OCR: '{pred_str}']")
-                        res = expected_winnings
-                    else:
-                        print(f"Winnings prediction: {res} [Raw OCR: '{pred_str}']")
+                winnings_detected = False
+                for win_attempt in range(3):
+                    pred_str = read_ocr_string(model, winnings_crop, "winnings")
+                    res = parse_winnings(pred_str)
+                    
+                    if res > 0 or '+' in pred_str:
+                        expected_winnings = 10000 * (odds_list[best_horse_idx] + 1)
+                        if res != expected_winnings:
+                            print(f"Winnings prediction misread as {res}. Overriding to expected math: {expected_winnings} [Raw OCR: '{pred_str}']")
+                            res = expected_winnings
+                        else:
+                            print(f"Winnings prediction: {res} [Raw OCR: '{pred_str}']")
+                            
+                        bot_state.stats.winnings += (res - 10000)
+                        bot_state.stats.races_won += 1
+                        winnings_detected = True
+                        break
                         
-                    bot_state.stats.winnings += (res - 10000)
-                    bot_state.stats.races_won += 1
-                else:
-                    print(f"No winnings detected. Raw OCR: '{pred_str}'")
+                    if win_attempt < 2:
+                        print(f"No winnings detected. Raw OCR: '{pred_str}'. Retrying in 2 seconds... (Attempt {win_attempt + 1})")
+                        time.sleep(2)
+                        winnings_img = pyautogui.screenshot(region=(win_x + x_coord, win_y + y_coord, w_coord, h_coord))
+                        winnings_crop = cv2.cvtColor(np.array(winnings_img), cv2.COLOR_RGB2BGR)
+                    else:
+                        print(f"No winnings detected. Raw OCR: '{pred_str}'")
+
+                if not winnings_detected:
                     bot_state.stats.winnings -= 10000
                     bot_state.stats.races_lost += 1
 
@@ -563,6 +633,7 @@ def main_loop():
             if consecutive_read_failures >= 5:
                 print("Failsafe triggered: Attempting to clear stuck screen...")
                 bot_state.status = "Running Failsafe..."
+                bot_state.notifications.append(f"Failsafe triggered: Continuous failure reading odds ({consecutive_read_failures} attempts).")
                 
                 if win32gui.GetForegroundWindow() != hwnd:
                     bot_state.set_running(False)
@@ -615,25 +686,17 @@ if __name__ == "__main__":
         
     browse_url = f"{protocol}://127.0.0.1:8027"
     
-    if USE_WEBVIEW:
-        print(f"Opening Dashboard in App Window: {browse_url}")
-        start_dashboard(bot_state, host_ip, SSL_DIR)
-        
-        # Move the bot loop to a background thread so the GUI can run on the main thread
-        bot_thread = threading.Thread(target=main_loop, daemon=True)
-        bot_thread.start()
-        
-        # Set custom window icon if provided
-        icon_path = os.path.join(get_resource_path(), 'resources', 'icon.ico')
-        icon_path = icon_path if os.path.exists(icon_path) else None
-        
-        app_url = f"{browse_url}/?t={int(time.time())}"
-        window = webview.create_window('AutoBet', app_url, width=750, height=900, background_color='#11111b')
-        webview.start(icon=icon_path)
-    else:
-        print(f"Opening Dashboard in browser: {browse_url}")
-        print("[INFO] Install 'pywebview' (pip install pywebview) to open the dashboard as a standalone application.")
-        webbrowser.open(browse_url)
-        
-        start_dashboard(bot_state, host_ip, SSL_DIR)
-        main_loop()
+    print(f"Opening Dashboard in App Window: {browse_url}")
+    start_dashboard(bot_state, host_ip, SSL_DIR)
+    
+    # Move the bot loop to a background thread so the GUI can run on the main thread
+    bot_thread = threading.Thread(target=main_loop, daemon=True)
+    bot_thread.start()
+    
+    # Set custom window icon if provided
+    icon_path = os.path.join(get_resource_path(), 'resources', 'icon.ico')
+    icon_path = icon_path if os.path.exists(icon_path) else None
+    
+    app_url = f"{browse_url}/?t={int(time.time())}"
+    window = webview.create_window('AutoBet', app_url, width=750, height=900, background_color='#11111b')
+    webview.start(icon=icon_path)

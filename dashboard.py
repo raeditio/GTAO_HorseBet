@@ -139,6 +139,8 @@ HTML_TEMPLATE = """
             grid-template-columns: repeat(3, 1fr);
             gap: 8px;
         }
+        /* Time Running always spans full width */
+        .stats-grid .stat-box:first-child { grid-column: 1 / -1; }
         .stat-box {
             background: var(--surface);
             border: 1px solid var(--border);
@@ -191,8 +193,8 @@ HTML_TEMPLATE = """
             .header-badges { width: 100%; }
             .pill { font-size: 10px; padding: 4px 10px; }
             .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
-            /* Time Running spans full width on 2-col layout */
-            .stats-grid .stat-box:first-child { grid-column: span 2; }
+            /* Total chips spans full width*/
+            .stats-grid .stat-box:nth-child(4) { grid-column: span 2; }
             /* Win Rate spans full width */
             .stats-grid .stat-box:last-child { grid-column: span 2; }
             .stat-value { font-size: 20px; }
@@ -250,6 +252,17 @@ HTML_TEMPLATE = """
         .btn-stop:hover {
             background: #f5607a;
             box-shadow: 0 4px 20px rgba(244,63,94,0.35);
+            transform: translateY(-1px);
+        }
+        .btn-secondary {
+            background: var(--surface2);
+            color: var(--text);
+            border: 1px solid var(--border);
+            margin-top: 10px;
+        }
+        .btn-secondary:hover {
+            background: rgba(255,255,255,0.05);
+            border-color: var(--border-hi);
             transform: translateY(-1px);
         }
         .action-btn:active { transform: translateY(1px); box-shadow: none; }
@@ -334,6 +347,22 @@ HTML_TEMPLATE = """
             background: var(--border);
             margin: 4px 0;
         }
+
+        /* ── Logs ── */
+        .log-container {
+            background: #000;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px;
+            font-family: monospace;
+            font-size: 11px;
+            color: #a5b4fc;
+            height: 200px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .log-line { margin-bottom: 2px; line-height: 1.4; }
     </style>
 </head>
 <body>
@@ -375,6 +404,10 @@ HTML_TEMPLATE = """
             <div id="winnings" class="stat-value accent-cyan">$0</div>
         </div>
         <div class="stat-box">
+            <div class="stat-label">Total Chips</div>
+            <div id="total_chips" class="stat-value accent-green">0</div>
+        </div>
+        <div class="stat-box">
             <div class="stat-label">Wins</div>
             <div id="races_won" class="stat-value accent-green">0</div>
         </div>
@@ -392,6 +425,10 @@ HTML_TEMPLATE = """
     <div class="card">
         <div class="card-label">Automation</div>
         <button id="start-btn" class="action-btn btn-start" onclick="toggleBot()">Start Automation</button>
+        <button id="screenshot-btn" class="action-btn btn-secondary" onclick="captureScreenshot()">📷 Capture Game Window</button>
+        <div id="screenshot-container" style="display: none; margin-top: 16px; text-align: center;">
+            <img id="screenshot-img" style="max-width: 100%; border-radius: 8px; border: 1px solid var(--border);" src="" alt="Game Screenshot">
+        </div>
     </div>
  
     <!-- Settings -->
@@ -430,12 +467,30 @@ HTML_TEMPLATE = """
                 <span class="slider"></span>
             </label>
         </div>
+
+        <div class="settings-row">
+            <div>
+                <div class="row-label">Show Logs</div>
+                <div class="row-hint">Display console output in dashboard</div>
+            </div>
+            <label class="switch">
+                <input type="checkbox" id="toggle-logs" onchange="toggleLogs(this.checked)">
+                <span class="slider"></span>
+            </label>
+        </div>
+    </div>
+
+    <!-- Logs Card -->
+    <div id="log-card" class="card" style="display: none;">
+        <div class="card-label">Console Logs</div>
+        <div id="log-container" class="log-container"></div>
     </div>
  
 </div>
  
     <script>
         let isUpdating = false;
+        let screenshotTimeout = null;
  
         async function fetchStats() {
             if(isUpdating) return;
@@ -469,6 +524,7 @@ HTML_TEMPLATE = """
                 const total_races = data.races_won + data.races_lost;
                 document.getElementById('races_total').innerText = total_races;
                 document.getElementById('win_prob').innerText = total_races > 0 ? ((data.races_won / total_races) * 100).toFixed(1) + '%' : '0%';
+                document.getElementById('total_chips').innerText = (data.total_chips || 0).toLocaleString();
                 
                 const startBtn = document.getElementById('start-btn');
                 startBtn.innerText = data.running ? "Stop Automation" : "Start Automation";
@@ -486,6 +542,19 @@ HTML_TEMPLATE = """
                         if (ip === data.host_ip) opt.selected = true;
                         select.appendChild(opt);
                     });
+                }
+
+                const logToggle = document.getElementById('toggle-logs');
+                if (logToggle && logToggle.checked && data.logs) {
+                    const logCont = document.getElementById('log-container');
+                    const isScrolledToBottom = logCont.scrollHeight - logCont.clientHeight <= logCont.scrollTop + 10;
+                    
+                    if (logCont.dataset.logCount != data.logs.length || logCont.dataset.lastLog != data.logs[data.logs.length - 1]) {
+                        logCont.innerHTML = data.logs.map(l => `<div class="log-line">${l.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>`).join('');
+                        logCont.dataset.logCount = data.logs.length;
+                        logCont.dataset.lastLog = data.logs[data.logs.length - 1];
+                        if (isScrolledToBottom) logCont.scrollTop = logCont.scrollHeight;
+                    }
                 }
             } catch (err) {
                 const statusBadge = document.getElementById('status-badge');
@@ -516,7 +585,35 @@ HTML_TEMPLATE = """
             await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
             setTimeout(() => { isUpdating = false; fetchStats(); }, 200);
         }
+
+        function toggleLogs(show) {
+            document.getElementById('log-card').style.display = show ? 'block' : 'none';
+            if (show) fetchStats();
+        }
  
+        async function captureScreenshot() {
+            const btn = document.getElementById('screenshot-btn');
+            btn.innerText = "Capturing...";
+            try {
+                const res = await fetch('/api/screenshot');
+                const data = await res.json();
+                if (data.success) {
+                    document.getElementById('screenshot-img').src = "data:image/jpeg;base64," + data.image;
+                    document.getElementById('screenshot-container').style.display = 'block';
+                    
+                    if (screenshotTimeout) clearTimeout(screenshotTimeout);
+                    screenshotTimeout = setTimeout(() => {
+                        document.getElementById('screenshot-container').style.display = 'none';
+                    }, 10000);
+                } else {
+                    alert(data.error || "Failed to capture screenshot.");
+                }
+            } catch (err) {
+                alert("Error requesting screenshot.");
+            }
+            btn.innerText = "📷 Capture Game Window";
+        }
+
         setInterval(fetchStats, 1000);
         window.onload = fetchStats;
     </script>
@@ -564,7 +661,9 @@ def start_dashboard(bot_state, host_ip='0.0.0.0', ssl_dir=None):
             "game_running": bot_state.game_running,
             "elapsed": elapsed,
             "host_ip": bot_state.host_ip,
-            "available_ips": bot_state.available_ips
+            "available_ips": bot_state.available_ips,
+            "logs": bot_state.logs,
+            "total_chips": bot_state.stats.total_chips
         })
 
     @app.route('/api/settings', methods=['POST'])
@@ -575,6 +674,13 @@ def start_dashboard(bot_state, host_ip='0.0.0.0', ssl_dir=None):
         if 'web_hosting' in data: bot_state.web_hosting = data['web_hosting']
         if 'host_ip' in data: bot_state.host_ip = data['host_ip']
         return jsonify({"success": True})
+
+    @app.route('/api/screenshot')
+    def screenshot():
+        b64_img = bot_state.get_screenshot()
+        if b64_img:
+            return jsonify({"success": True, "image": b64_img})
+        return jsonify({"success": False, "error": "Game window not found or error taking screenshot."})
 
     def run_flask_app():
         local_ssl_dir = ssl_dir
