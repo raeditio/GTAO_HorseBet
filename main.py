@@ -597,12 +597,12 @@ def main_loop():
                         winnings_detected = True
                         break
                         
-                    if win_attempt < 2:
-                        print(f"No winnings detected. Raw OCR: '{pred_str}'. Retrying in 2 seconds... (Attempt {win_attempt + 1})")
-                        time.sleep(2)
-                        winnings_img = pyautogui.screenshot(region=(win_x + x_coord, win_y + y_coord, w_coord, h_coord))
-                        winnings_crop = cv2.cvtColor(np.array(winnings_img), cv2.COLOR_RGB2BGR)
-                    else:
+                    # if win_attempt < 2:
+                    #     print(f"No winnings detected. Raw OCR: '{pred_str}'. Retrying in 2 seconds... (Attempt {win_attempt + 1})")
+                    #     time.sleep(2)
+                    #     winnings_img = pyautogui.screenshot(region=(win_x + x_coord, win_y + y_coord, w_coord, h_coord))
+                    #     winnings_crop = cv2.cvtColor(np.array(winnings_img), cv2.COLOR_RGB2BGR)
+                    # else:
                         print(f"No winnings detected. Raw OCR: '{pred_str}'")
 
                 if not winnings_detected:
