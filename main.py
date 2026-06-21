@@ -203,7 +203,7 @@ def parse_chips(pred_str):
 
 def load_svm_model():
     """Loads and verifies the SVM model."""
-    filepath = os.path.join(get_resource_path(), 'resources', 'data', 'svm_model.yml')
+    filepath = os.path.join(get_resource_path(), 'resources', 'model', 'svm_model.yml')
     
     if not os.path.exists(filepath):
         print(f"Error: Model file not found at '{filepath}'")
